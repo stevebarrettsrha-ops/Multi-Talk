@@ -1,0 +1,9 @@
+{
+    "prompt": "A woman is passionately singing into a professional microphone in a recording studio. She wears large black headphones and a dark cardigan over a gray top. Her long, wavy brown hair frames her face as she looks slightly upwards, her mouth open mid-song. The studio is equipped with various audio equipment, including a mixing console and a keyboard, with soundproofing panels on the walls. The lighting is warm and focused on her, creating a professional and intimate atmosphere. A close-up shot captures her expressive performance.",
+    "cond_image": "examples/single/single1.png",
+    "tts_audio": {
+        "text": "Welcome to multi-talk, this is an audio-driven video generation model for multiple person.",
+        "human1_voice": "weights/Kokoro-82M/voices/af_heart.pt"
+    },
+    "cond_audio":{}
+}

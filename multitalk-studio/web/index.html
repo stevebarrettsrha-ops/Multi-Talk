@@ -1,0 +1,1571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MultiTalk Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%224%22 fill=%22%238b5cf6%22/%3E%3Cpath d=%22M4 6h8M4 9h5M10 9l2 3V9%22 stroke=%22white%22 stroke-width=%221.4%22 fill=%22none%22/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#08080a; --chrome:#101014; --panel:#14141a; --raised:#1a1a21;
+    --line:#222229; --hair:#1a1a20;
+    --text:#f2f2f3; --muted:#7e7e88; --dim:#5a5a64;
+    --accent:#7c4dff; --accent-2:#e0398a; --pink:#ff2d7a;
+    --ok:#3ddc97; --warn:#ffb020; --err:#ff5a5a;
+    --rail:194px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);overflow:hidden;
+    font-family:Inter,"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  button,input,textarea,select{font:inherit;color:inherit}
+  button{cursor:pointer;border:0;background:none}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#26262e;border-radius:8px;border:3px solid var(--bg)}
+  svg{stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  [hidden]{display:none!important}
+  input[type=text],input[type=password],select,textarea{background:#16161c;
+    border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;
+    color:var(--text);width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:#3a3a46}
+  textarea{resize:vertical}
+  .flab{font-size:11px;color:var(--muted);margin-bottom:5px;display:block}
+
+  .app{display:grid;grid-template-columns:var(--rail) 1fr;height:100vh}
+  .rail{border-right:1px solid var(--hair);padding:16px 12px;display:flex;
+        flex-direction:column;gap:3px;background:var(--chrome)}
+  .main{overflow-y:auto;position:relative}
+  .brand{display:flex;align-items:center;gap:9px;padding:6px 10px 18px;
+         font-weight:700;font-size:14px;letter-spacing:.15em}
+  .brand .dot{width:9px;height:9px;border-radius:50%;
+              background:linear-gradient(135deg,var(--accent),var(--accent-2))}
+  .nav{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;
+       color:var(--muted);font-weight:500;width:100%;text-align:left}
+  .nav:hover{background:var(--panel);color:var(--text)}
+  .nav[aria-current="page"]{background:var(--raised);color:var(--text)}
+  .nav svg{width:17px;height:17px;flex:none}
+  .nav .tag{margin-left:auto;font-size:10px;padding:2px 6px;border-radius:6px;
+            background:var(--pink);color:#fff;font-weight:600}
+  .rail .spacer{flex:1}
+  .statuspill{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px;
+              color:var(--muted);border-radius:10px;width:100%;text-align:left}
+  .statuspill:hover{background:var(--panel)}
+  .statuspill i{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+  .statuspill.on i{background:var(--ok);box-shadow:0 0 0 3px rgba(61,220,151,.16)}
+  .statuspill.off i{background:var(--err);box-shadow:0 0 0 3px rgba(255,90,90,.14)}
+
+  /* ---------- the bar ---------- */
+  .barwrap{position:sticky;top:0;z-index:20;padding:18px 26px 12px;
+           background:linear-gradient(180deg,var(--bg) 78%,transparent);
+           pointer-events:none}
+  .barwrap>*{pointer-events:auto}
+  .bar{max-width:1080px;margin:0 auto;background:var(--panel);
+       border:1px solid var(--line);border-radius:18px;padding:12px 12px 10px;
+       transition:border-color .15s,box-shadow .15s}
+  .bar:focus-within{border-color:#3d3552;
+       box-shadow:0 0 0 1px rgba(124,77,255,.35),0 24px 60px -34px rgba(124,77,255,.8)}
+  .bar textarea{background:transparent;border:0;padding:6px 8px 2px;font-size:15px;
+       line-height:1.5;min-height:46px;max-height:180px;overflow-y:auto}
+  .bar textarea::placeholder{color:var(--dim)}
+  .barrow{display:flex;align-items:center;gap:7px;padding:6px 4px 0;flex-wrap:wrap}
+  .barrow .grow{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;
+        background:var(--raised);border:1px solid var(--line);font-size:12.5px;
+        color:var(--muted);white-space:nowrap}
+  .pill:hover{border-color:#34343e;color:var(--text)}
+  .pill.on{border-color:rgba(124,77,255,.6);background:rgba(124,77,255,.14);color:#cdbcff}
+  .pill.need{border-color:rgba(255,176,32,.55);color:#ffd693}
+  .pill svg{width:14px;height:14px}
+  .chips{display:inline-flex;background:var(--raised);border:1px solid var(--line);
+         border-radius:999px;padding:3px}
+  .chips button{padding:5px 11px;border-radius:999px;font-size:12px;color:var(--muted)}
+  .chips button.on{background:#2e2e38;color:var(--text)}
+  .chips button:disabled{opacity:.4;cursor:not-allowed}
+  .gen{padding:9px 20px;border-radius:999px;font-weight:600;font-size:13.5px;
+       display:inline-flex;align-items:center;gap:8px;color:#fff;
+       background:linear-gradient(100deg,var(--accent),var(--accent-2));
+       box-shadow:0 10px 26px -14px rgba(224,57,138,.9)}
+  .gen:disabled{opacity:.45;box-shadow:none;cursor:not-allowed}
+  .ttsbox{margin:8px 4px 2px;display:grid;grid-template-columns:1fr auto;gap:8px;
+          align-items:start}
+  .ttsbox textarea{min-height:64px;font-size:13px}
+  .ttsbox .vsel{display:flex;flex-direction:column;gap:6px;min-width:170px}
+  .refs{max-width:1080px;margin:10px auto 0;display:flex;gap:8px;flex-wrap:wrap}
+  .ref{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+       padding:8px;display:flex;gap:9px;align-items:center;max-width:360px}
+  .ref img{width:56px;height:56px;object-fit:cover;border-radius:8px;display:block}
+  .ref .n{min-width:0;font-size:12px}
+  .ref .n b{display:block;font-weight:500;white-space:nowrap;overflow:hidden;
+            text-overflow:ellipsis;max-width:220px}
+  .ref .n span{color:var(--dim);font-size:11px}
+  .ref audio{height:30px;max-width:200px}
+  .ref .x{width:24px;height:24px;border-radius:7px;color:var(--dim);flex:none}
+  .ref .x:hover{background:var(--raised);color:var(--text)}
+  .hintline{max-width:1080px;margin:8px auto 0;font-size:12px;color:var(--dim)}
+
+  /* ---------- feed ---------- */
+  .feed{padding:6px 26px 60px;max-width:1440px;margin:0 auto}
+  .feedhead{display:flex;align-items:center;gap:10px;margin:14px 0 12px;
+            font-size:13px;color:var(--muted)}
+  .feedhead .grow{flex:1}
+  .masonry{columns:4;column-gap:12px}
+  @media (max-width:1500px){.masonry{columns:3}}
+  @media (max-width:1050px){.masonry{columns:2}}
+  @media (max-width:640px){.masonry{columns:1}}
+  .tile{break-inside:avoid;margin-bottom:12px;position:relative;border-radius:14px;
+        overflow:hidden;background:var(--panel);border:1px solid var(--hair);
+        display:block;width:100%}
+  .tile video{width:100%;display:block;background:#000}
+  .tile .over{position:absolute;inset:auto 0 0 0;padding:32px 12px 11px;
+        background:linear-gradient(180deg,transparent,rgba(0,0,0,.82));
+        opacity:0;transition:opacity .16s;text-align:left;cursor:pointer}
+  .tile:hover .over,.tile:focus-within .over{opacity:1}
+  .tile .over .cap{font-size:12px;color:#e9e9ec;display:-webkit-box;
+        -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .tile .over .meta{font-size:10.5px;color:#a9a9b4;margin-top:3px}
+  .tile .acts{position:absolute;top:8px;right:8px;display:flex;gap:4px;opacity:0;
+        transition:opacity .16s}
+  .tile:hover .acts,.tile:focus-within .acts{opacity:1}
+  .tile .acts button{width:28px;height:28px;border-radius:8px;background:rgba(8,8,10,.72);
+        border:1px solid rgba(255,255,255,.1);color:#fff;display:grid;place-items:center}
+  .tile .acts svg{width:14px;height:14px}
+  .skel{break-inside:avoid;margin-bottom:12px;border-radius:14px;overflow:hidden;
+        background:var(--panel);border:1px solid var(--hair);padding:14px}
+  .skel .ph{width:100%;aspect-ratio:1;border-radius:10px;position:relative;overflow:hidden;
+        background:linear-gradient(100deg,#17171e 30%,#22222c 50%,#17171e 70%);
+        background-size:220% 100%;animation:sweep 1.5s linear infinite}
+  .skel .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+        opacity:.35;filter:blur(1px)}
+  @keyframes sweep{to{background-position:-220% 0}}
+  .skel .lbl{font-size:12px;color:var(--muted);margin-top:10px;display:flex;
+        justify-content:space-between;gap:8px}
+  .skel .row{display:flex;gap:6px;margin-top:9px}
+  .bar4{height:3px;border-radius:2px;background:#23232b;margin-top:8px;overflow:hidden}
+  .bar4 i{display:block;height:100%;border-radius:2px;transition:width .4s ease;
+        background:linear-gradient(90deg,var(--accent),var(--accent-2))}
+  .bar4.indet i{width:34%;animation:slide 1.3s ease-in-out infinite}
+  @keyframes slide{0%{margin-left:-34%}100%{margin-left:100%}}
+  .skel.bad{border-color:rgba(255,90,90,.4)}
+  .skel.bad .lbl{color:#ff9a9a}
+  .joblog{background:#050507;border:1px solid var(--hair);border-radius:9px;
+        font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;
+        color:#93939d;max-height:180px;overflow:auto;white-space:pre-wrap;
+        padding:8px;margin-top:8px}
+  .empty{padding:60px 20px;text-align:center;color:var(--dim);font-size:13px}
+  .empty b{display:block;color:var(--muted);font-size:14px;margin-bottom:6px}
+
+  /* ---------- popovers ---------- */
+  .pop{position:fixed;z-index:40;background:var(--panel);border:1px solid var(--line);
+       border-radius:16px;padding:16px;width:min(440px,92vw);
+       box-shadow:0 30px 70px -30px #000;max-height:calc(100vh - 24px);overflow-y:auto}
+  .pop h3{margin:0 0 12px;font-size:13.5px;font-weight:600}
+  .orow{display:flex;align-items:center;gap:12px;padding:9px 11px;background:var(--raised);
+        border-radius:10px;margin-bottom:7px;font-size:12.5px;flex-wrap:wrap}
+  .orow .lab{color:#c6c6cf;white-space:nowrap}
+  .orow .ctl{margin-left:auto;display:flex;align-items:center;gap:9px}
+  .orow select{width:auto;min-width:112px;padding:5px 8px;font-size:12px;background:#212129}
+  .orow input[type=text]{width:120px;background:transparent;border:0;text-align:right}
+  .slider{display:flex;align-items:center;gap:9px;min-width:170px}
+  .slider input[type=range]{flex:1;accent-color:var(--pink)}
+  .slider .v{font-size:12px;color:#c6c6cf;width:40px;text-align:right;
+        font-variant-numeric:tabular-nums}
+
+  /* ---------- lightbox ---------- */
+  .lightbox{position:fixed;inset:0;background:#06060a;z-index:80;display:flex;
+            align-items:stretch}
+  .lightbox .stage{flex:1;display:grid;place-items:center;padding:34px;min-width:0;
+            min-height:0}
+  .lightbox .stage video{width:100%;height:100%;object-fit:contain;
+            border-radius:12px;display:block;background:#000}
+  .lightbox .side{width:330px;flex:none;border-left:1px solid var(--hair);
+            background:var(--chrome);padding:22px;overflow-y:auto}
+  .lightbox .side h3{margin:0 0 4px;font-size:15px}
+  .lightbox .side .pr{font-size:13px;color:#d6d6db;line-height:1.6;margin:10px 0 16px;
+            white-space:pre-wrap}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:7px 0;
+      border-bottom:1px solid var(--hair);font-size:12px;color:var(--muted)}
+  .kv b{color:var(--text);font-weight:500;text-align:right;word-break:break-all}
+  .lbacts{display:flex;gap:7px;flex-wrap:wrap;margin-top:16px}
+
+  /* ---------- pages ---------- */
+  .page{padding:26px 26px 80px;max-width:980px;margin:0 auto}
+  .panel{background:var(--panel);border:1px solid var(--hair);border-radius:14px;
+         padding:16px;margin-bottom:12px}
+  .panel h2{margin:0 0 4px;font-size:15px}
+  .panel p.sub{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.6}
+  .frow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .frow input[type=text],.frow input[type=password]{flex:1;min-width:190px}
+  .frow select{width:auto;min-width:170px}
+  .flist{display:flex;flex-direction:column;gap:6px}
+  .fitem{display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--raised);
+         border-radius:11px}
+  .fitem .n{font-size:13px;min-width:0}
+  .fitem .n b{font-weight:500;display:block;word-break:break-all}
+  .fitem .n span{font-size:11.5px;color:var(--dim)}
+  .fitem .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+  .state{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
+         color:var(--muted);white-space:nowrap}
+  .state.ok{color:#8ff0c4;border-color:rgba(61,220,151,.36);background:rgba(61,220,151,.09)}
+  .state.missing{color:#ffa8a8;border-color:rgba(255,90,90,.36);background:rgba(255,90,90,.08)}
+  .state.warn{color:#ffd693;border-color:rgba(255,176,32,.36);background:rgba(255,176,32,.08)}
+  .setrow{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--raised);
+          border:1px solid var(--line);border-radius:12px;margin-bottom:8px;flex-wrap:wrap}
+  .setrow.on{border-color:var(--accent)}
+  .setrow .n{flex:1;min-width:220px}
+  .setrow .n b{display:block;font-size:13px}
+  .setrow .n span{font-size:11.5px;color:var(--dim)}
+  .setrow .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .log{background:#050507;border:1px solid var(--hair);border-radius:11px;padding:12px;
+       font-family:ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;font-size:11.5px;
+       color:#93939d;height:200px;overflow-y:auto;white-space:pre-wrap;line-height:1.55}
+  .btn{padding:9px 15px;border-radius:10px;background:#232329;font-size:12.5px;
+       font-weight:500}
+  .btn:hover{background:#2c2c34}
+  .btn.go{background:linear-gradient(100deg,var(--accent),var(--accent-2));color:#fff}
+  .btn.thin{padding:6px 12px;font-size:12px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .note{font-size:12px;color:var(--dim);margin:10px 0 0;line-height:1.55}
+  .bad-text{color:#ff9a9a}
+
+  /* ---------- sheets ---------- */
+  .veil{position:fixed;inset:0;background:rgba(4,4,6,.86);backdrop-filter:blur(7px);
+        display:grid;place-items:center;padding:24px;z-index:60}
+  .sheet{width:min(720px,100%);max-height:88vh;overflow-y:auto;background:var(--panel);
+         border:1px solid var(--line);border-radius:18px;padding:26px 28px}
+  .sheet h1{margin:0 0 6px;font-size:20px}
+  .sheet p.lede{margin:0 0 18px;color:var(--muted);line-height:1.6}
+  .steps{display:flex;flex-direction:column;gap:2px;margin:16px 0}
+  .step{display:flex;gap:12px;align-items:flex-start;padding:10px 12px;border-radius:11px}
+  .step .mark{width:20px;height:20px;border-radius:50%;border:1.5px solid #34343c;flex:none;
+              display:grid;place-items:center;font-size:11px;color:var(--dim);margin-top:1px}
+  .step.running{background:var(--raised)}
+  .step.running .mark{border-color:var(--accent);color:#cdbcff}
+  .step.done .mark{background:var(--ok);border-color:var(--ok);color:#06210f}
+  .step.error .mark{background:var(--err);border-color:var(--err);color:#2a0606}
+  .step .body{flex:1;min-width:0}
+  .step .lbl{font-size:13.5px;font-weight:500;display:flex;gap:10px;
+             justify-content:space-between;align-items:baseline}
+  .step .pc{font-size:12px;font-weight:600;color:#cdbcff;flex:none}
+  .step .dt{font-size:12px;color:var(--dim);margin-top:2px;word-break:break-word}
+  .step.error .dt{color:#ff9a9a}
+  .pick{display:flex;flex-direction:column;gap:8px;margin:14px 0}
+  .pick label{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;
+        border-radius:12px;border:1px solid var(--line);background:var(--raised);
+        cursor:pointer}
+  .pick label:has(input:checked){border-color:var(--accent);background:rgba(124,77,255,.09)}
+  .pick input{margin-top:3px;accent-color:var(--accent);width:auto}
+  .pick b{display:block;font-size:13.5px}
+  .pick em{font-style:normal;font-size:12.5px;color:var(--muted);display:block;
+        line-height:1.55}
+  .rowbtn{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .switch{display:flex;align-items:center;justify-content:space-between;gap:10px;
+        background:var(--raised);border:1px solid var(--line);border-radius:10px;
+        padding:9px 11px;font-size:12.5px}
+  .switch input{accent-color:var(--accent);width:16px;height:16px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:90;
+        background:#1b1b22;border:1px solid var(--line);border-radius:11px;
+        padding:11px 16px;font-size:13px;box-shadow:0 18px 40px -20px #000;
+        max-width:min(560px,92vw)}
+  .toast.bad{border-color:rgba(255,90,90,.5);color:#ffb3b3}
+
+  @media (max-width:760px){
+    .app{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+    .rail{flex-direction:row;overflow-x:auto;padding:8px;border-right:0;
+          border-bottom:1px solid var(--hair)}
+    .rail .spacer,.brand,.statuspill{display:none}
+    .nav{width:auto;white-space:nowrap}
+    .barwrap,.feed,.page{padding-left:14px;padding-right:14px}
+    .ttsbox{grid-template-columns:1fr}
+    .lightbox{flex-direction:column}
+    .lightbox .side{width:auto;border-left:0;border-top:1px solid var(--hair);
+          max-height:45vh}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><i class="dot"></i>MULTITALK</div>
+    <button class="nav" data-view="create" aria-current="page">
+      <svg viewBox="0 0 24 24"><path d="m12 3 2 5.5L19.5 10 14 12l-2 5.5L10 12 4.5 10 10 8.5z"/></svg>Generate</button>
+    <button class="nav" data-view="library">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Library</button>
+    <button class="nav" data-view="models">
+      <svg viewBox="0 0 24 24"><path d="M12 3 3 8l9 5 9-5zM3 16l9 5 9-5M3 12l9 5 9-5"/></svg>Models
+      <span class="tag" id="modelsTag" hidden>!</span></button>
+    <button class="nav" data-view="engine">
+      <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM2 10h2M2 14h2M20 10h2M20 14h2M10 2v2M14 2v2M10 20v2M14 20v2"/></svg>Engine
+      <span class="tag" id="engineTag" hidden>!</span></button>
+    <div class="spacer"></div>
+    <button class="statuspill" id="enginePill"><i></i><span>Checking…</span></button>
+    <button class="nav" id="navSettings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</button>
+  </aside>
+
+  <main class="main" id="mainCol">
+    <!-- ===================== generate ===================== -->
+    <section data-page="create">
+      <div class="barwrap">
+        <div class="bar">
+          <textarea id="prompt" rows="1" spellcheck="false"
+            placeholder="Describe the scene: who is talking, where, the light and the camera…"></textarea>
+          <div class="ttsbox" id="ttsBox" hidden>
+            <textarea id="ttsText" spellcheck="false"
+              placeholder="What they say. For two people: (s1) Hello there. (s2) Hi! (s1) …"></textarea>
+            <div class="vsel">
+              <label class="flab" for="voice1">Voice — person 1</label>
+              <select id="voice1"></select>
+              <label class="flab" for="voice2" id="voice2Lab">Voice — person 2</label>
+              <select id="voice2"></select>
+            </div>
+          </div>
+          <div class="barrow">
+            <button class="pill need" id="btnImage" title="The picture of the people to animate">
+              <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+              <span id="imageLabel">Picture</span></button>
+            <input type="file" id="imageFile" accept="image/*" hidden>
+            <div class="chips" id="segPeople" title="How many people speak">
+              <button class="on" data-v="1">1 person</button>
+              <button data-v="2">2 people</button>
+            </div>
+            <div class="chips" id="segSource" title="Where the speech comes from">
+              <button class="on" data-v="files">Recording</button>
+              <button data-v="tts">Type it</button>
+            </div>
+            <button class="pill need" id="btnAudio1" title="Person 1's speech (left person when there are two)">
+              <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              <span id="audio1Label">Voice 1</span></button>
+            <input type="file" id="audio1File" accept="audio/*,video/*" hidden>
+            <button class="pill" id="btnAudio2" title="Person 2's speech (right person)" hidden>
+              <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              <span id="audio2Label">Voice 2</span></button>
+            <input type="file" id="audio2File" accept="audio/*,video/*" hidden>
+            <div class="chips" id="segMode" title="One 3-second clip, or the whole audio (up to 40 s)">
+              <button data-v="clip">3 s clip</button>
+              <button class="on" data-v="streaming">Whole audio</button>
+            </div>
+            <button class="pill" id="btnSettings">
+              <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg>
+              Settings</button>
+            <span class="grow"></span>
+            <button class="gen" id="btnGenerate">
+              <svg viewBox="0 0 24 24" style="width:15px;height:15px"><path d="m12 3 2 5.5L19.5 10 14 12l-2 5.5L10 12 4.5 10 10 8.5z"/></svg>
+              <span id="genLabel">Generate</span></button>
+          </div>
+        </div>
+        <div class="refs" id="refsRow"></div>
+        <div class="hintline" id="hintLine"></div>
+      </div>
+      <div class="feed">
+        <div class="masonry" id="feed"></div>
+      </div>
+    </section>
+
+    <!-- ===================== library ===================== -->
+    <section data-page="library" hidden>
+      <div class="feed">
+        <div class="feedhead" style="margin-top:22px">Library<span class="grow"></span>
+          <input type="text" id="libSearch" style="max-width:250px"
+                 placeholder="Search your videos"></div>
+        <div class="masonry" id="libGrid"></div>
+      </div>
+    </section>
+
+    <!-- ===================== models ===================== -->
+    <section class="page" data-page="models" hidden>
+      <div class="panel">
+        <h2>Weights</h2>
+        <p class="sub">MultiTalk runs from four repositories: MeiGen's INT8
+          MultiTalk model and text encoder, Wan2.1's VAE, image encoder and
+          tokenizers, the wav2vec2 audio encoder, and — for typed speech —
+          Kokoro. Sizes marked ≈ are estimates until HuggingFace is asked;
+          the download uses the real numbers.</p>
+        <div id="setsList"></div>
+      </div>
+      <div class="panel">
+        <h2>HuggingFace</h2>
+        <div class="frow">
+          <input type="password" id="hfToken" placeholder="Access token (only for gated repos)">
+          <input type="text" id="hfEndpoint" placeholder="https://huggingface.co">
+          <button class="btn" id="btnSaveHf">Save</button>
+        </div>
+        <p class="note" id="hfTokenNote"></p>
+      </div>
+      <div class="panel">
+        <h2>Downloads</h2>
+        <div class="flist" id="dlList"></div>
+      </div>
+      <div class="panel">
+        <h2>On this machine</h2>
+        <p class="sub" id="weightsNote"></p>
+        <div class="flist" id="localList"></div>
+      </div>
+    </section>
+
+    <!-- ===================== engine ===================== -->
+    <section class="page" data-page="engine" hidden>
+      <div class="panel">
+        <h2>Everything MultiTalk needs</h2>
+        <p class="sub">Install anything marked missing. The engine gets its own
+          Python environment, so nothing here touches your system Python.</p>
+        <div class="flist" id="depList"></div>
+        <div class="rowbtn">
+          <button class="btn" id="btnRecheck">Recheck</button>
+          <button class="btn go" id="btnInstallAll">Install everything missing</button>
+          <button class="btn" id="btnReRun">Run setup again</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Preflight</h2>
+        <p class="sub">What this machine can do with the weights you chose.
+          Measured, not guessed.</p>
+        <div id="preflight"></div>
+        <div class="rowbtn"><button class="btn" id="btnPreflight">Measure again</button></div>
+      </div>
+      <div class="panel">
+        <h2>PyTorch build</h2>
+        <p class="sub">torch 2.4.1, the version MultiTalk was written for. The
+          CUDA 12.1 build covers every RTX 20, 30 and 40 card.</p>
+        <div class="frow">
+          <select id="torchIndex">
+            <option value="">Automatic (CUDA 12.1)</option>
+            <option value="https://download.pytorch.org/whl/cu121">NVIDIA — CUDA 12.1</option>
+            <option value="https://download.pytorch.org/whl/cu124">NVIDIA — CUDA 12.4</option>
+            <option value="https://download.pytorch.org/whl/cu118">NVIDIA — CUDA 11.8</option>
+          </select>
+          <button class="btn" id="btnSaveTorch">Save</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Activity</h2>
+        <p class="sub" id="taskTitle">Nothing running.</p>
+        <div class="log" id="taskLog"></div>
+        <div class="rowbtn"><button class="btn" id="btnCancelTask" hidden>Stop</button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- generation settings -->
+<div class="pop" id="settingsPop" hidden>
+  <h3>Generation</h3>
+  <div class="orow"><span class="lab">Size</span><div class="ctl">
+    <div class="chips" id="segSize">
+      <button data-v="multitalk-240">320</button>
+      <button class="on" data-v="multitalk-360">480</button>
+      <button data-v="multitalk-480">640</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Steps</span><div class="ctl"><div class="slider">
+    <input type="range" id="stepsSl" min="4" max="50" step="1" value="8">
+    <span class="v" id="stepsVal">8</span></div></div></div>
+  <div class="orow"><span class="lab">Prompt strength</span><div class="ctl"><div class="slider">
+    <input type="range" id="textSl" min="1" max="8" step="0.5" value="1">
+    <span class="v" id="textVal">1.0</span></div></div></div>
+  <div class="orow"><span class="lab">Lip-sync strength</span><div class="ctl"><div class="slider">
+    <input type="range" id="audioSl" min="1" max="8" step="0.5" value="2">
+    <span class="v" id="audioVal">2.0</span></div></div></div>
+  <div class="orow"><span class="lab">Shift</span><div class="ctl"><div class="slider">
+    <input type="range" id="shiftSl" min="1" max="12" step="0.5" value="2">
+    <span class="v" id="shiftVal">2.0</span></div></div></div>
+  <div class="orow" id="orderRow"><span class="lab">Two voices</span><div class="ctl">
+    <div class="chips" id="segOrder">
+      <button class="on" data-v="add">Take turns</button>
+      <button data-v="para">At once</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">TeaCache</span><div class="ctl">
+    <div class="chips" id="segTeacache">
+      <button class="on" data-v="off">Off</button><button data-v="on">On</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Tiled VAE</span><div class="ctl">
+    <div class="chips" id="segTile">
+      <button data-v="0">Off</button><button class="on" data-v="32">On</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Text encoder on CPU</span><div class="ctl">
+    <div class="chips" id="segT5">
+      <button data-v="off">Off</button><button class="on" data-v="on">On</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Seed</span><div class="ctl">
+    <input type="text" id="seed" placeholder="Random" inputmode="numeric">
+    <button class="btn thin" id="btnSeedClear">Random</button></div></div>
+  <p class="note" id="costNote"></p>
+  <div class="rowbtn"><button class="btn thin" id="btnResetOpts">Back to defaults</button>
+    <button class="btn thin" id="btnCloseSettings">Done</button></div>
+</div>
+
+<!-- lightbox -->
+<div class="lightbox" id="lightbox" hidden>
+  <div class="stage"><video id="lbVideo" controls loop playsinline></video></div>
+  <div class="side">
+    <h3 id="lbTitle">Video</h3>
+    <div class="pr" id="lbPrompt"></div>
+    <div id="lbMeta"></div>
+    <div class="lbacts">
+      <button class="btn go" id="lbReuse">Reuse settings</button>
+      <button class="btn" id="lbVary">New seed</button>
+      <button class="btn" id="lbDownload">Download</button>
+      <button class="btn" id="lbDelete">Delete</button>
+      <button class="btn" id="lbClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- setup -->
+<div class="veil" id="veilSetup" hidden>
+  <div class="sheet">
+    <h1>Set up MultiTalk</h1>
+    <p class="lede">MultiTalk Studio runs MeiGen's MultiTalk on this machine.
+      Setup builds a private Python environment for the engine, installs
+      PyTorch and the engine's packages, and downloads about 29 GB of weights.
+      The preflight below says what your hardware will make of that.</p>
+    <div id="setupChoice">
+      <label class="flab">Which model</label>
+      <div class="pick" id="precisionList"></div>
+      <div class="grid2">
+        <div class="switch"><label for="optTts">Typed speech (Kokoro, 0.4 GB)</label>
+          <input type="checkbox" id="optTts" checked></div>
+        <div class="switch"><label for="optXformers">xformers (optional speed-up)</label>
+          <input type="checkbox" id="optXformers" checked></div>
+      </div>
+      <div id="preflightSetup" class="note"></div>
+      <div class="rowbtn">
+        <button class="btn go" id="btnRunSetup">Start setup</button>
+        <button class="btn" id="btnSkipSetup">Not now</button>
+      </div>
+    </div>
+    <div id="setupProgress" hidden>
+      <div class="steps" id="stepList"></div>
+      <div class="log" id="setupLog"></div>
+      <div class="rowbtn">
+        <button class="btn go" id="setupDone" hidden>Start creating</button>
+        <button class="btn" id="setupRetry" hidden>Try again</button>
+        <button class="btn" id="setupHide">Hide</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- settings sheet -->
+<div class="veil" id="veilSettings" hidden>
+  <div class="sheet">
+    <h1>Settings</h1>
+    <p class="lede">Where the engine and its weights live.</p>
+    <div class="grid2">
+      <div><label class="flab" for="cfgEngine">MultiTalk engine folder</label>
+        <input type="text" id="cfgEngine"></div>
+      <div><label class="flab" for="cfgWeights">Weights folder (empty: engine/weights)</label>
+        <input type="text" id="cfgWeights"></div>
+    </div>
+    <div class="rowbtn">
+      <button class="btn go" id="btnSaveCfg">Save</button>
+      <button class="btn" id="btnCloseCfg">Close</button>
+    </div>
+    <p class="note" id="cfgNote"></p>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+
+/* ========================= state ========================= */
+var S = {
+  view: "create", people: 1, source: "files", mode: "streaming",
+  size: "multitalk-360", image: null, audio1: null, audio2: null,
+  status: null, jobs: [], clips: [], libFilter: "", lightbox: null,
+  setupCursor: 0, taskId: null, taskCursor: 0, setupSeen: false,
+  openLogs: {}, defaultsFor: null
+};
+function $(id) { return document.getElementById(id); }
+async function api(path, opts) {
+  var r = await fetch(path, opts), b = null;
+  try { b = await r.json(); } catch (e) { b = null; }
+  if (!r.ok) throw new Error((b && b.error) || ("Request failed: " + r.status));
+  return b;
+}
+function postJson(path, body) {
+  return api(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify(body || {}) });
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; });
+}
+function fmtSize(b) {
+  if (!b) return "—";
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+  if (b >= 1e6) return (b / 1e6).toFixed(0) + " MB";
+  return (b / 1e3).toFixed(0) + " KB";
+}
+var toastTimer = null;
+function toast(msg, bad) {
+  var t = $("toast");
+  t.textContent = msg; t.classList.toggle("bad", !!bad); t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, bad ? 8000 : 3500);
+}
+function store(k, v) {
+  try {
+    if (v === undefined) return JSON.parse(localStorage.getItem(k));
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch (e) { return null; }
+}
+function grow(ta) {
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
+}
+function mkBtn(label, fn) {
+  var b = document.createElement("button");
+  b.className = "btn thin";
+  b.textContent = label;
+  b.addEventListener("click", fn);
+  return b;
+}
+function segOn(id) {
+  var b = $(id).querySelector("button.on");
+  return b ? b.dataset.v : "";
+}
+function setSeg(id, v) {
+  $(id).querySelectorAll("button").forEach(function (b) {
+    b.classList.toggle("on", b.dataset.v === String(v)); });
+}
+
+/* ========================= the draft ========================= */
+function saveDraft() {
+  store("mt.draft", { prompt: $("prompt").value, tts: $("ttsText").value,
+    people: S.people, source: S.source, mode: S.mode, size: S.size,
+    image: S.image, audio1: S.audio1, audio2: S.audio2,
+    voice1: $("voice1").value, voice2: $("voice2").value,
+    order: segOn("segOrder"), teacache: segOn("segTeacache"),
+    tile: segOn("segTile"), t5: segOn("segT5"),
+    steps: $("stepsSl").value, text: $("textSl").value,
+    audio: $("audioSl").value, shift: $("shiftSl").value,
+    defaultsFor: S.defaultsFor });
+}
+function loadDraft() {
+  var d = store("mt.draft");
+  if (!d) return;
+  $("prompt").value = d.prompt || "";
+  $("ttsText").value = d.tts || "";
+  S.people = d.people === 2 ? 2 : 1;
+  S.source = d.source === "tts" ? "tts" : "files";
+  S.mode = d.mode === "clip" ? "clip" : "streaming";
+  S.size = d.size || "multitalk-360";
+  S.image = d.image || null; S.audio1 = d.audio1 || null; S.audio2 = d.audio2 || null;
+  S.pendingVoices = [d.voice1, d.voice2];
+  S.defaultsFor = d.defaultsFor || null;
+  [["segOrder", d.order], ["segTeacache", d.teacache], ["segTile", d.tile],
+   ["segT5", d.t5]].forEach(function (t) { if (t[1]) setSeg(t[0], t[1]); });
+  [["stepsSl", "stepsVal", d.steps, 0], ["textSl", "textVal", d.text, 1],
+   ["audioSl", "audioVal", d.audio, 1], ["shiftSl", "shiftVal", d.shift, 1]
+  ].forEach(function (t) {
+    if (t[2] == null) return;
+    $(t[0]).value = t[2]; $(t[1]).textContent = Number(t[2]).toFixed(t[3]); });
+}
+// The model's own defaults (FusionX wants 8 steps and low guidance, the base
+// model 40 and high), applied when the chosen model changes — never over
+// what someone set by hand for the same model.
+function applyDefaults(force) {
+  var st = S.status;
+  if (!st) return;
+  var key = st.config.precision;
+  if (!force && S.defaultsFor === key) return;
+  var d = (st.precisions[key] || {}).defaults;
+  if (!d) return;
+  $("stepsSl").value = d.steps; $("stepsVal").textContent = d.steps;
+  $("textSl").value = d.text_scale; $("textVal").textContent = Number(d.text_scale).toFixed(1);
+  $("audioSl").value = d.audio_scale; $("audioVal").textContent = Number(d.audio_scale).toFixed(1);
+  $("shiftSl").value = d.shift; $("shiftVal").textContent = Number(d.shift).toFixed(1);
+  setSeg("segTeacache", d.teacache ? "on" : "off");
+  var rec = st.recommended || {};
+  if (rec.size) { S.size = rec.size; setSeg("segSize", rec.size); }
+  setSeg("segTile", rec.vae_tile ? String(rec.vae_tile) : "0");
+  setSeg("segT5", rec.t5_cpu === false ? "off" : "on");
+  S.defaultsFor = key;
+  syncAll();
+}
+
+/* ========================= the bar ========================= */
+function syncAll() {
+  setSeg("segPeople", S.people); setSeg("segSource", S.source);
+  setSeg("segMode", S.mode); setSeg("segSize", S.size);
+  $("ttsBox").hidden = S.source !== "tts";
+  $("btnAudio1").hidden = S.source === "tts";
+  $("btnAudio2").hidden = S.source === "tts" || S.people === 1;
+  $("voice2").hidden = $("voice2Lab").hidden = S.people === 1;
+  $("orderRow").hidden = S.people === 1 || S.source === "tts";
+  $("audio1Label").textContent = S.audio1 ? (S.people === 2 ? "Left · " : "Voice · ")
+    + S.audio1.label : (S.people === 2 ? "Left voice" : "Voice");
+  $("audio2Label").textContent = S.audio2 ? "Right · " + S.audio2.label : "Right voice";
+  $("imageLabel").textContent = S.image ? "Picture · " + S.image.label : "Picture";
+  $("btnImage").classList.toggle("on", !!S.image);
+  $("btnImage").classList.toggle("need", !S.image);
+  $("btnAudio1").classList.toggle("on", !!S.audio1);
+  $("btnAudio1").classList.toggle("need", !S.audio1 && !(S.people === 2 && S.audio2));
+  $("btnAudio2").classList.toggle("on", !!S.audio2);
+  renderRefs();
+  syncCost();
+  grow($("prompt"));
+  saveDraft();
+}
+function renderRefs() {
+  var box = $("refsRow");
+  box.innerHTML = "";
+  var add = function (kind, item, label, clear) {
+    var el = document.createElement("div");
+    el.className = "ref";
+    el.innerHTML = (kind === "image"
+      ? '<img alt="" src="/api/upload/' + encodeURIComponent(item.name) + '">'
+      : '<audio controls preload="none" src="/api/upload/' +
+        encodeURIComponent(item.name) + '"></audio>') +
+      '<div class="n"><b>' + esc(item.label) + "</b><span>" + esc(label) +
+      "</span></div>";
+    var x = document.createElement("button");
+    x.className = "x"; x.textContent = "×"; x.title = "Remove";
+    x.addEventListener("click", clear);
+    el.appendChild(x);
+    box.appendChild(el);
+  };
+  if (S.image) add("image", S.image, S.people === 2
+    ? "Left person speaks voice 1, right person voice 2" : "Reference picture",
+    function () { S.image = null; syncAll(); });
+  if (S.source === "files") {
+    if (S.audio1) add("audio", S.audio1, S.people === 2 ? "Left person" : "Speech",
+      function () { S.audio1 = null; syncAll(); });
+    if (S.audio2 && S.people === 2) add("audio", S.audio2, "Right person",
+      function () { S.audio2 = null; syncAll(); });
+  }
+}
+function syncCost() {
+  var st = S.status || {};
+  var sizes = st.sizes || {};
+  var size = sizes[S.size] || { label: "", note: "" };
+  var steps = Number($("stepsSl").value);
+  var calls = Number($("textSl").value) === 1 ? 2 : 3;
+  $("costNote").textContent = size.label + " square-ish (the picture's own " +
+    "aspect is kept). " + size.note + " " + steps + " steps × " + calls +
+    " model passes per step, per 3.2 s clip. " +
+    (S.mode === "streaming" ? "Whole audio: one clip per 2.2 s of speech after the first."
+                            : "One 3.2 s clip.");
+  var hint = "";
+  if (S.people === 2 && S.source === "files")
+    hint = "Two people: voice 1 drives the person on the left of the picture, voice 2 the right.";
+  else if (S.people === 2)
+    hint = "Two people: mark who speaks with (s1) and (s2). (s1) is the left person.";
+  $("hintLine").textContent = hint;
+}
+async function upload(input, kind) {
+  var file = (input.files || [])[0];
+  input.value = "";
+  if (!file) return null;
+  var fd = new FormData();
+  fd.append("file", file);
+  try {
+    var r = await api("/api/upload", { method: "POST", body: fd });
+    if (kind && r.kind !== kind) {
+      toast(kind === "image" ? "That is not a picture." : "That is not audio.", true);
+      return null;
+    }
+    return { name: r.name, label: r.label || file.name };
+  } catch (e) { toast(e.message, true); return null; }
+}
+function collect() {
+  var p = {
+    prompt: $("prompt").value.trim(), people: S.people, source: S.source,
+    image: S.image && S.image.name, mode: S.mode, size: S.size,
+    steps: Number($("stepsSl").value), text_scale: Number($("textSl").value),
+    audio_scale: Number($("audioSl").value), shift: Number($("shiftSl").value),
+    teacache: segOn("segTeacache") === "on",
+    vae_tile: Number(segOn("segTile") || 0),
+    t5_cpu: segOn("segT5") !== "off",
+    seed: $("seed").value.trim() ? Number($("seed").value.trim()) : null
+  };
+  if (S.source === "files") {
+    p.audio1 = S.audio1 ? S.audio1.name : "";
+    p.audio2 = S.people === 2 && S.audio2 ? S.audio2.name : "";
+    p.audio_type = segOn("segOrder") || "add";
+  } else {
+    p.tts_text = $("ttsText").value.trim();
+    p.voice1 = $("voice1").value;
+    p.voice2 = S.people === 2 ? $("voice2").value : "";
+  }
+  return p;
+}
+function blockedFromRendering() {
+  var st = S.status;
+  if (st && st.ready) return false;
+  if (!st) toast("Still connecting to the app — try again in a moment.", true);
+  else if (!st.setup_complete && !st.python) openSetup();
+  else if ((st.missing_models || []).length) {
+    show("models");
+    toast(st.blocker, true);
+  } else { show("engine"); toast(st.blocker || "The engine is not ready.", true); }
+  return true;
+}
+async function generate() {
+  if (blockedFromRendering()) return;
+  var p = collect();
+  $("btnGenerate").disabled = true;
+  try {
+    await postJson("/api/generate", p);
+    toast("Queued. The first render loads the model into RAM, which takes a few minutes.");
+    pollJobs();
+  } catch (e) { toast(e.message, true); }
+  finally { $("btnGenerate").disabled = false; }
+}
+
+/* ========================= jobs and the feed ========================= */
+var jobTimer = null, jobPolling = false, pollAgain = false;
+async function pollJobs() {
+  if (jobPolling) { pollAgain = true; return; }
+  jobPolling = true;
+  try { do { pollAgain = false; await pollJobsOnce(); } while (pollAgain); }
+  finally { jobPolling = false; }
+}
+async function pollJobsOnce() {
+  clearTimeout(jobTimer);
+  var jobs;
+  try { jobs = await api("/api/jobs"); }
+  catch (e) { jobTimer = setTimeout(pollJobs, 3000); return; }
+  var finished = jobs.filter(function (n) {
+    return n.status !== "running" && n.status !== "queued" && S.jobs.some(function (o) {
+      return o.id === n.id && (o.status === "running" || o.status === "queued"); }); });
+  S.jobs = jobs;
+  if (finished.length) {
+    await loadClips();
+    finished.forEach(function (j) {
+      if (j.status === "done") toast("Clip ready — " + j.title + ".");
+      else if (j.status === "error") toast(j.error || "The render failed.", true);
+    });
+  }
+  renderFeed();
+  var open = Object.keys(S.openLogs);
+  for (var i = 0; i < open.length; i++) await refreshLog(open[i]);
+  if (jobs.some(function (j) { return j.status === "running" || j.status === "queued"; }))
+    jobTimer = setTimeout(pollJobs, 1500);
+}
+async function refreshLog(id) {
+  var box = document.querySelector('.joblog[data-job="' + id + '"]');
+  if (!box) return;
+  try {
+    var d = await api("/api/jobs/" + id + "/log");
+    var bottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    box.textContent = d.lines.join("\n") || "Nothing yet.";
+    if (bottom) box.scrollTop = box.scrollHeight;
+  } catch (e) { delete S.openLogs[id]; }
+}
+function skeleton(job) {
+  var el = document.createElement("div");
+  var bad = job.status === "error";
+  el.className = "skel" + (bad ? " bad" : "");
+  var pct = Math.round(job.pct || 0);
+  var img = job.settings && job.settings.image
+    ? '<img alt="" src="/api/upload/' + encodeURIComponent(job.settings.image) + '">' : "";
+  var label = bad ? (job.error || "Failed")
+    : job.status === "queued" ? "Waiting for the GPU" +
+      (job.position ? " · " + job.position + " ahead" : "")
+    : job.status === "cancelled" ? "Stopped" : (job.stage || "Working…");
+  el.innerHTML = '<div class="ph">' + img + "</div>" +
+    '<div class="lbl"><span>' + esc(label) + "</span><span>" +
+    (job.status === "running" ? pct + "%" : "") + "</span></div>" +
+    (job.status === "running" ? '<div class="bar4' + (pct <= 14 ? " indet" : "") +
+      '"><i style="width:' + pct + '%"></i></div>' : "");
+  var row = document.createElement("div");
+  row.className = "row";
+  if (job.status === "running" || job.status === "queued") {
+    row.appendChild(mkBtn(job.status === "queued" ? "Remove" : "Stop", function () {
+      api("/api/jobs/" + job.id + "/cancel", { method: "POST" })
+        .then(pollJobs).catch(function (e) { toast(e.message, true); });
+    }));
+  }
+  if (job.status !== "queued") {
+    row.appendChild(mkBtn(S.openLogs[job.id] ? "Hide log" : "Log", function () {
+      if (S.openLogs[job.id]) delete S.openLogs[job.id];
+      else S.openLogs[job.id] = true;
+      renderFeed(); refreshLog(job.id);
+    }));
+  }
+  if (bad || job.status === "cancelled") {
+    row.appendChild(mkBtn("Dismiss", function () {
+      S.dismissed = S.dismissed || {};
+      S.dismissed[job.id] = true; renderFeed(); }));
+  }
+  el.appendChild(row);
+  if (S.openLogs[job.id]) {
+    var log = document.createElement("div");
+    log.className = "joblog"; log.dataset.job = job.id;
+    log.textContent = "Loading…";
+    el.appendChild(log);
+  }
+  return el;
+}
+function tile(c) {
+  var el = document.createElement("div");
+  el.className = "tile";
+  el.tabIndex = 0;
+  el.setAttribute("role", "button");
+  el.setAttribute("aria-label", "Open " + (c.title || "clip"));
+  el.innerHTML = '<video src="/api/clip/' + encodeURIComponent(c.id) +
+    '" muted loop playsinline preload="metadata"></video>' +
+    '<div class="acts">' +
+    '<button data-act="reuse" title="Reuse settings"><svg viewBox="0 0 24 24">' +
+    '<path d="M4 9a8 8 0 0 1 14-4M20 15a8 8 0 0 1-14 4"/><path d="M18 4v5h-5M6 20v-5h5"/></svg></button>' +
+    '<button data-act="dl" title="Download"><svg viewBox="0 0 24 24">' +
+    '<path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg></button>' +
+    '<button data-act="del" title="Delete"><svg viewBox="0 0 24 24">' +
+    '<path d="M6 6l12 12M18 6 6 18"/></svg></button></div>' +
+    '<div class="over"><div class="cap">' + esc(c.title) + "</div>" +
+    '<div class="meta">' + esc(sizeLabel(c.size)) + " · " +
+    (c.seconds ? c.seconds + " s" : "?") + " · " + c.people +
+    (c.people === 2 ? " people" : " person") +
+    (c.seed == null || c.seed < 0 ? "" : " · seed " + c.seed) + "</div></div>";
+  var vid = el.querySelector("video");
+  vid.addEventListener("loadedmetadata", function () {
+    try { vid.currentTime = 0.1; } catch (e) { /* not ready */ } });
+  el.addEventListener("mouseenter", function () { vid.play().catch(function () {}); });
+  el.addEventListener("mouseleave", function () { vid.pause(); });
+  vid.addEventListener("click", function () { openLightbox(c); });
+  el.querySelector(".over").addEventListener("click", function () { openLightbox(c); });
+  el.addEventListener("keydown", function (e) {
+    if (e.target === el && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault(); openLightbox(c); } });
+  el.querySelectorAll("[data-act]").forEach(function (b) {
+    b.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      if (b.dataset.act === "reuse") reuse(c);
+      if (b.dataset.act === "dl") window.open("/api/clip/" + c.id, "_blank");
+      if (b.dataset.act === "del") removeClip(c);
+    });
+  });
+  return el;
+}
+function sizeLabel(key) {
+  var s = S.status && S.status.sizes && S.status.sizes[key];
+  return s ? s.label : (key || "");
+}
+function renderFeed() {
+  var box = $("feed");
+  box.innerHTML = "";
+  var dismissed = S.dismissed || {};
+  var live = S.jobs.filter(function (j) {
+    return j.status !== "done" && !dismissed[j.id]; });
+  live.forEach(function (j) { box.appendChild(skeleton(j)); });
+  if (!S.clips.length && !live.length) {
+    box.innerHTML = '<div class="empty"><b>Nothing here yet</b>' +
+      "Add a picture of a person, a recording of what they say, and press " +
+      "Generate.</div>";
+    return;
+  }
+  S.clips.slice(0, 60).forEach(function (c) { box.appendChild(tile(c)); });
+}
+function renderLib() {
+  var box = $("libGrid");
+  var f = S.libFilter.trim().toLowerCase();
+  var list = S.clips.filter(function (c) {
+    return !f || (c.title + " " + c.prompt + " " + (c.tts_text || ""))
+      .toLowerCase().indexOf(f) >= 0; });
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = '<div class="empty"><b>Nothing here yet</b>Videos you make land here.</div>';
+    return;
+  }
+  list.forEach(function (c) { box.appendChild(tile(c)); });
+}
+async function loadClips() {
+  try { S.clips = await api("/api/clips"); } catch (e) { return; }
+  renderFeed(); renderLib();
+}
+function reuse(c) {
+  $("prompt").value = c.prompt || "";
+  S.people = c.people === 2 ? 2 : 1;
+  S.source = c.source === "tts" ? "tts" : "files";
+  S.mode = c.mode || "streaming";
+  S.size = c.size || S.size;
+  S.image = c.image ? { name: c.image, label: "from " + (c.title || "clip") } : null;
+  S.audio1 = c.audio1 ? { name: c.audio1, label: "voice 1" } : null;
+  S.audio2 = c.audio2 ? { name: c.audio2, label: "voice 2" } : null;
+  if (c.tts_text) $("ttsText").value = c.tts_text;
+  if (c.voice1) $("voice1").value = c.voice1;
+  if (c.voice2) $("voice2").value = c.voice2;
+  if (c.audio_type) setSeg("segOrder", c.audio_type);
+  $("stepsSl").value = c.steps; $("stepsVal").textContent = c.steps;
+  $("textSl").value = c.text_scale; $("textVal").textContent = Number(c.text_scale).toFixed(1);
+  $("audioSl").value = c.audio_scale; $("audioVal").textContent = Number(c.audio_scale).toFixed(1);
+  $("shiftSl").value = c.shift; $("shiftVal").textContent = Number(c.shift).toFixed(1);
+  setSeg("segTeacache", c.teacache ? "on" : "off");
+  setSeg("segTile", String(c.vae_tile || 0));
+  setSeg("segT5", c.t5_cpu === false ? "off" : "on");
+  $("seed").value = c.seed == null || c.seed < 0 ? "" : c.seed;
+  closeLightbox();
+  show("create");
+  syncAll();
+  toast("Settings, picture and audio loaded from the clip.");
+}
+async function removeClip(c) {
+  if (!confirm("Delete this clip?")) return;
+  if (S.lightbox && S.lightbox.id === c.id) closeLightbox();
+  document.querySelectorAll("video").forEach(function (v) {
+    if ((v.getAttribute("src") || "").indexOf("/api/clip/" + c.id) === 0) {
+      v.pause(); v.removeAttribute("src"); v.load(); }
+  });
+  try { await api("/api/clip/" + c.id, { method: "DELETE" }); }
+  catch (e) { toast(e.message, true); }
+  loadClips();
+}
+function openLightbox(c) {
+  S.lightbox = c;
+  $("lbVideo").src = "/api/clip/" + c.id;
+  $("lbVideo").play().catch(function () {});
+  $("lbTitle").textContent = c.title;
+  $("lbPrompt").textContent = (c.prompt || "") +
+    (c.tts_text ? "\n\n“" + c.tts_text + "”" : "");
+  var rows = [["Size", sizeLabel(c.size)],
+              ["Length", c.seconds ? c.seconds + " s" : "—"],
+              ["People", c.people],
+              ["Speech", c.source === "tts" ? "Typed · " + [c.voice1, c.voice2]
+                 .filter(Boolean).join(", ") : "Recording"],
+              ["Seed", c.seed == null || c.seed < 0 ? "—" : c.seed],
+              ["Steps", c.steps],
+              ["Prompt / lip-sync", c.text_scale + " / " + c.audio_scale],
+              ["Model", c.precision || "—"],
+              ["Render time", c.took ? Math.round(c.took / 60) + " min" : "—"]];
+  $("lbMeta").innerHTML = rows.map(function (r) {
+    return '<div class="kv"><span>' + esc(r[0]) + "</span><b>" + esc(r[1]) +
+      "</b></div>"; }).join("");
+  $("lightbox").hidden = false;
+}
+function closeLightbox() {
+  $("lightbox").hidden = true;
+  $("lbVideo").pause();
+}
+
+/* ========================= views ========================= */
+function show(view) {
+  S.view = view;
+  document.querySelectorAll("[data-page]").forEach(function (p) {
+    p.hidden = p.dataset.page !== view; });
+  document.querySelectorAll(".nav[data-view]").forEach(function (b) {
+    if (b.dataset.view === view) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current"); });
+  $("settingsPop").hidden = true;
+  $("mainCol").scrollTop = 0;
+  if (view === "models") { loadHf(); loadLocal(); pollTasks(); }
+  if (view === "engine") { loadDeps(); loadPreflight(); pollTasks(); }
+  if (view === "library") renderLib();
+  if (view === "create") requestAnimationFrame(function () {
+    grow($("prompt")); renderFeed(); });
+}
+function placePop(pop, anchor) {
+  pop.hidden = false;
+  var r = anchor.getBoundingClientRect();
+  pop.style.top = Math.max(12, Math.min(r.bottom + 8,
+    window.innerHeight - pop.offsetHeight - 12)) + "px";
+  pop.style.left = Math.max(12, Math.min(r.left,
+    window.innerWidth - pop.offsetWidth - 12)) + "px";
+}
+
+/* ========================= preflight ========================= */
+async function loadPreflight() {
+  var d;
+  try { d = await api("/api/preflight"); } catch (e) { return; }
+  var tone = d.verdict === "ok" ? "ok" : d.verdict === "tight" ? "warn" : "missing";
+  var gib = 1024 * 1024 * 1024;
+  var rows = [
+    ["GPU", (d.gpu || "not detected yet") +
+     (d.vram ? " · " + (d.vram / gib).toFixed(0) + " GB VRAM" : "")],
+    ["System RAM", d.ram ? (d.ram / gib).toFixed(0) + " GB" : "unknown"],
+    ["Free disk", d.free_disk ? (d.free_disk / 1e9).toFixed(0) + " GB" : "unknown"],
+    ["Still to download", "≈ " + (d.to_download / 1e9).toFixed(1) + " GB of " +
+      (d.download / 1e9).toFixed(0) + " GB"],
+    ["Peak RAM while rendering", "≈ " + (d.peak / gib).toFixed(0) + " GB"]];
+  var html = '<div class="fitem"><div class="n"><b>' +
+    (d.verdict === "ok" ? "Should run" : d.verdict === "tight"
+      ? "Tight, but workable" : "Not enough headroom") + "</b><span>" +
+    esc(d.precision) + '</span></div><div class="right"><span class="state ' +
+    tone + '">' + esc(d.verdict) + "</span></div></div>" +
+    rows.map(function (r) {
+      return '<div class="kv"><span>' + esc(r[0]) + "</span><b>" + esc(r[1]) +
+        "</b></div>"; }).join("") +
+    (d.notes || []).map(function (n) {
+      return '<p class="note">' + esc(n) + "</p>"; }).join("");
+  $("preflight").innerHTML = html;
+  $("preflightSetup").innerHTML = html;
+}
+
+/* ========================= engine page ========================= */
+var depsBusy = null;
+function loadDeps(fresh) {
+  if (!depsBusy) depsBusy = fetchDeps(fresh).finally(function () { depsBusy = null; });
+  return depsBusy;
+}
+async function fetchDeps(fresh) {
+  var box = $("depList"), btn = $("btnRecheck");
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    var d = await api("/api/deps" + (fresh ? "?fresh=1" : ""));
+    $("torchIndex").value = d.torch_index || "";
+    box.innerHTML = "";
+    var bad = 0;
+    d.items.forEach(function (it) {
+      if (it.state === "missing") bad++;
+      var el = document.createElement("div");
+      el.className = "fitem";
+      el.innerHTML = '<div class="n"><b>' + esc(it.label) + "</b><span>" +
+        esc(it.detail || "") + '</span></div><div class="right"><span class="state ' +
+        esc(it.state) + '">' + esc(it.state) + "</span></div>";
+      var right = el.querySelector(".right");
+      if (it.action === "models") {
+        right.appendChild(mkBtn("Open Models", function () { show("models"); }));
+      } else if (it.action) {
+        var label = it.action === "update" ? "Update"
+          : it.action === "reinstall" ? "Reinstall" : "Install";
+        var b = mkBtn(label, function () { installDep(it.id, b); });
+        if (it.state === "missing") b.className = "btn thin go";
+        right.appendChild(b);
+      }
+      box.appendChild(el);
+    });
+    $("engineTag").hidden = bad === 0;
+  } catch (e) {
+    box.innerHTML = '<div class="empty bad-text">' + esc(e.message) + "</div>";
+  } finally { btn.disabled = false; btn.textContent = "Recheck"; }
+}
+async function installDep(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
+  try {
+    var r = await postJson("/api/deps/" + encodeURIComponent(id) + "/install",
+                           { torch_index: $("torchIndex").value });
+    S.taskId = r.task.id; S.taskCursor = 0; $("taskLog").textContent = "";
+    pollTasks();
+    return r.task.id;
+  } catch (e) {
+    toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Install"; }
+    return null;
+  }
+}
+function waitForTask(id) {
+  return new Promise(function (resolve) {
+    var tick = async function () {
+      try {
+        var t = await api("/api/tasks?id=" + id + "&since=999999");
+        if (t.state === "running") { setTimeout(tick, 1500); return; }
+        resolve(t.state === "done");
+      } catch (e) { resolve(false); }
+    };
+    tick();
+  });
+}
+async function installAllMissing() {
+  var order = ["venv", "torch", "packages"];
+  try {
+    for (var i = 0; i < order.length; i++) {
+      var d = await api("/api/deps");
+      var item = d.items.filter(function (x) { return x.id === order[i]; })[0];
+      if (!item || item.state === "ok" || item.state === "warn") continue;
+      var id = await installDep(order[i]);
+      if (!id) return;
+      if (!(await waitForTask(id))) {
+        toast("Stopped at " + item.label + " — see the log.", true); return; }
+      await loadDeps(true);
+    }
+    var st = await api("/api/status");
+    if ((st.missing_models || []).length) {
+      show("models");
+      toast("The environment is ready. Now download the weights.");
+    } else toast("Everything is installed.");
+  } catch (e) { toast(e.message, true); }
+}
+var taskTimer = null;
+async function pollTasks() {
+  clearTimeout(taskTimer);
+  var list = [];
+  try { list = await api("/api/tasks"); } catch (e) { return; }
+  var dls = list.filter(function (t) { return t.kind === "download"; });
+  var box = $("dlList");
+  box.innerHTML = dls.length ? "" : '<div class="empty">No downloads running.</div>';
+  dls.slice(0, 12).forEach(function (t) {
+    var el = document.createElement("div");
+    el.className = "fitem"; el.style.display = "block";
+    el.innerHTML = '<div style="display:flex;gap:10px;align-items:center">' +
+      '<div class="n"><b>' + esc(t.title) + "</b><span>" + esc(t.detail || t.state) +
+      '</span></div><div class="right"><span class="state ' +
+      (t.state === "done" ? "ok" : t.state === "error" ? "missing" : "") + '">' +
+      esc(t.state) + "</span></div></div>" +
+      '<div class="bar4"><i style="width:' + Math.round(t.pct) + '%"></i></div>';
+    if (t.state === "running") {
+      var b = mkBtn("Stop", function () {
+        api("/api/tasks/" + t.id + "/cancel", { method: "POST" }).then(pollTasks); });
+      b.style.marginTop = "8px";
+      el.appendChild(b);
+    }
+    box.appendChild(el);
+  });
+  if (!S.taskId) {
+    var run = list.filter(function (t) {
+      return t.state === "running" && t.kind === "dependency"; })[0];
+    if (run) { S.taskId = run.id; S.taskCursor = 0; }
+  }
+  if (S.taskId) {
+    try {
+      var t = await api("/api/tasks?id=" + S.taskId + "&since=" + S.taskCursor);
+      S.taskCursor = t.cursor;
+      $("taskTitle").textContent = t.title + " — " + (t.detail || t.state);
+      if (t.lines.length) {
+        var log = $("taskLog");
+        log.textContent += t.lines.join("\n") + "\n";
+        log.scrollTop = log.scrollHeight;
+      }
+      $("btnCancelTask").hidden = t.state !== "running";
+      if (t.state !== "running") {
+        S.taskId = null;
+        loadDeps(true); refreshStatus();
+        toast(t.state === "done" ? t.title + " finished."
+          : t.title + " failed — check the log.", t.state !== "done");
+      }
+    } catch (e) { S.taskId = null; }
+  }
+  if (list.some(function (t) { return t.state === "running"; })) {
+    taskTimer = setTimeout(pollTasks, 1400);
+  } else if (dls.length && S.view === "models") { loadHf(); loadLocal(); refreshStatus(); }
+}
+
+/* ========================= models page ========================= */
+async function loadHf() {
+  var s;
+  try { s = await api("/api/hf/settings"); } catch (e) { toast(e.message, true); return; }
+  $("hfEndpoint").value = s.endpoint;
+  $("hfTokenNote").textContent = s.token_set
+    ? "A token is saved (" + s.token_hint + "). Leave the box empty to keep it."
+    : "No token saved. These repositories are public; a token only helps with rate limits.";
+  var box = $("setsList");
+  box.innerHTML = "";
+  Object.keys(s.curated.sets).forEach(function (key) {
+    var set = s.curated.sets[key];
+    var mine = key === s.curated.precision;
+    var el = document.createElement("div");
+    el.className = "setrow" + (mine ? " on" : "");
+    var have = set.files.filter(function (f) { return f.installed; }).length;
+    el.innerHTML = '<div class="n"><b>' + esc(set.label) + "</b><span>" +
+      esc(set.note) + '</span></div><div class="right"><span class="state">≈ ' +
+      (set.download / 1e9).toFixed(0) + ' GB</span><span class="state ' +
+      (set.complete ? "ok" : "") + '">' + (set.complete ? "installed"
+        : have + " of " + set.files.length) + "</span></div>";
+    var right = el.querySelector(".right");
+    if (!set.complete || set.files.some(function (f) { return !f.installed; })) {
+      var b = mkBtn("Download", function () { downloadSet(key, b); });
+      if (mine) b.className = "btn thin go";
+      right.appendChild(b);
+    }
+    if (!mine) right.appendChild(mkBtn("Use this", function () { usePrecision(key); }));
+    box.appendChild(el);
+    if (!mine) return;
+    set.files.forEach(function (f) {
+      var fe = document.createElement("div");
+      fe.className = "fitem"; fe.style.margin = "0 0 6px 14px";
+      fe.innerHTML = '<div class="n"><b>' + esc(f.group) + " · " + esc(f.name) +
+        "</b><span>" + esc(f.why) + " " + (f.approx ? "≈ " : "") + fmtSize(f.size) +
+        (f.role === "optional" ? " · optional" : "") +
+        '</span></div><div class="right"><span class="state ' +
+        (f.installed ? "ok" : f.role === "optional" ? "warn" : "missing") + '">' +
+        (f.installed ? "have it" : "missing") + "</span></div>";
+      box.appendChild(fe);
+    });
+  });
+}
+async function usePrecision(key) {
+  try {
+    await postJson("/api/config", { precision: key });
+    await refreshStatus();
+    applyDefaults(true);
+    loadHf();
+    toast("Switched model. Its recommended steps and guidance are loaded.");
+  } catch (e) { toast(e.message, true); }
+}
+async function downloadSet(key, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Starting…"; }
+  try {
+    var r = await postJson("/api/hf/download", { precision: key });
+    toast(r.note || (r.tasks.length + " file(s) downloading."));
+    pollTasks();
+  } catch (e) { toast(e.message, true); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "Download"; } }
+}
+async function loadLocal() {
+  try {
+    var d = await api("/api/hf/local");
+    $("weightsNote").textContent = "Stored under " + d.weights_dir;
+    var box = $("localList");
+    box.innerHTML = d.models.length ? "" : '<div class="empty">No weights yet.</div>';
+    d.models.forEach(function (m) {
+      var el = document.createElement("div");
+      el.className = "fitem";
+      el.innerHTML = '<div class="n"><b>' + esc(m.path) + "</b><span>" +
+        fmtSize(m.size) + (m.partial ? " · unfinished" : "") +
+        '</span></div><div class="right"></div>';
+      el.querySelector(".right").appendChild(mkBtn("Delete", function () {
+        deleteModel(m.path); }));
+      box.appendChild(el);
+    });
+  } catch (e) { /* not set up */ }
+}
+async function deleteModel(path) {
+  if (!confirm("Delete " + path + " from disk?")) return;
+  try {
+    await api("/api/hf/local", { method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: path }) });
+    loadHf(); loadLocal(); refreshStatus();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ========================= setup ========================= */
+function openSetup() {
+  $("veilSetup").hidden = false;
+  $("setupChoice").hidden = false;
+  $("setupProgress").hidden = true;
+  var box = $("precisionList");
+  box.innerHTML = "";
+  var st = S.status || { precisions: {}, config: {} };
+  Object.keys(st.precisions).forEach(function (key) {
+    var l = document.createElement("label");
+    l.innerHTML = '<input type="radio" name="precision" value="' + esc(key) + '"' +
+      (key === st.config.precision ? " checked" : "") + "><span><b>" +
+      esc(st.precisions[key].label) + "</b><em>" + esc(st.precisions[key].note) +
+      "</em></span>";
+    box.appendChild(l);
+  });
+  $("optTts").checked = st.config.want_tts !== false;
+  $("optXformers").checked = st.config.want_xformers !== false;
+  loadPreflight();
+}
+async function runSetup() {
+  var prec = document.querySelector('input[name="precision"]:checked');
+  $("setupChoice").hidden = true;
+  $("setupProgress").hidden = false;
+  $("setupDone").hidden = true; $("setupRetry").hidden = true;
+  $("setupLog").textContent = "";
+  S.setupCursor = 0;
+  try {
+    await postJson("/api/setup/start", {
+      precision: prec ? prec.value : "int8-fusionx",
+      want_tts: $("optTts").checked, want_xformers: $("optXformers").checked });
+    pollSetup();
+  } catch (e) { toast(e.message, true); $("setupRetry").hidden = false; }
+}
+var setupTimer = null;
+async function pollSetup() {
+  clearTimeout(setupTimer);
+  var st;
+  try { st = await api("/api/setup/state?since=" + S.setupCursor); }
+  catch (e) { setupTimer = setTimeout(pollSetup, 2500); return; }
+  S.setupCursor = st.cursor;
+  var log = $("setupLog");
+  if (st.lines.length) {
+    log.textContent += st.lines.join("\n") + "\n";
+    log.scrollTop = log.scrollHeight;
+  }
+  var list = $("stepList");
+  list.innerHTML = "";
+  st.steps.forEach(function (s) {
+    var pct = typeof s.pct === "number" ? Math.round(s.pct) : null;
+    var d = document.createElement("div");
+    d.className = "step " + s.state;
+    d.innerHTML = '<span class="mark">' + (s.state === "done" ? "✓"
+      : s.state === "error" ? "!" : "") + '</span><div class="body">' +
+      '<div class="lbl"><span>' + esc(s.label) + "</span>" +
+      (pct === null ? "" : '<span class="pc">' + pct + "%</span>") +
+      '</div><div class="dt">' + esc(s.detail || "") + "</div>" +
+      (s.state === "running" ? (pct === null
+        ? '<div class="bar4 indet"><i></i></div>'
+        : '<div class="bar4"><i style="width:' + pct + '%"></i></div>') : "") +
+      "</div>";
+    list.appendChild(d);
+  });
+  if (st.done) { $("setupDone").hidden = false; await refreshStatus(); applyDefaults(true); return; }
+  if (st.error) { $("setupRetry").hidden = false; return; }
+  setupTimer = setTimeout(pollSetup, 1200);
+}
+
+/* ========================= status ========================= */
+async function refreshStatus() {
+  var st;
+  try { st = await api("/api/status"); } catch (e) { return; }
+  var first = !S.status;
+  S.status = st;
+  var pill = $("enginePill");
+  pill.classList.toggle("on", !!st.ready);
+  pill.classList.toggle("off", !st.ready);
+  pill.querySelector("span").textContent = st.ready
+    ? (st.running.length ? "Rendering" + (st.queued ? " · " + st.queued + " queued" : "")
+                         : "Ready" + (st.gpu ? " · " + st.gpu.replace("NVIDIA GeForce ", "") : ""))
+    : !st.python ? "Not set up" : st.missing_models.length ? "Weights missing"
+    : "Not ready";
+  $("modelsTag").hidden = !st.missing_models.length;
+  $("genLabel").textContent = st.ready ? "Generate" : "Set up";
+  var tts = $("segSource").querySelector('[data-v="tts"]');
+  tts.disabled = !st.tts_ready;
+  tts.title = st.tts_ready ? "" : "Download the Kokoro voices on the Models page first";
+  if (!st.tts_ready && S.source === "tts") { S.source = "files"; syncAll(); }
+  if ($("veilSettings").hidden) {
+    $("cfgEngine").value = st.config.engine_dir || "";
+    $("cfgWeights").value = st.config.weights_dir || "";
+  }
+  if (first || st.tts_ready !== S.ttsSeen) { S.ttsSeen = st.tts_ready; loadVoices(); }
+  if (first) applyDefaults(false);
+  syncCost();
+  if (!st.setup_complete && !st.python && !S.setupSeen) { S.setupSeen = true; openSetup(); }
+}
+async function loadVoices() {
+  var list = [];
+  try { list = await api("/api/voices"); } catch (e) { return; }
+  var want = S.pendingVoices || [$("voice1").value, $("voice2").value];
+  [["voice1", want[0] || "af_heart"], ["voice2", want[1] || "am_adam"]].forEach(function (t) {
+    var sel = $(t[0]);
+    sel.innerHTML = "";
+    list.forEach(function (v) {
+      var o = document.createElement("option");
+      o.value = v; o.textContent = v; sel.appendChild(o); });
+    if (list.indexOf(t[1]) >= 0) sel.value = t[1];
+  });
+  S.pendingVoices = null;
+}
+
+/* ========================= wiring ========================= */
+function wire() {
+  document.querySelectorAll("[data-view]").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.dataset.view); }); });
+  $("navSettings").addEventListener("click", function () { $("veilSettings").hidden = false; });
+  $("enginePill").addEventListener("click", function () { show("engine"); });
+
+  $("prompt").addEventListener("input", function (e) { grow(e.target); saveDraft(); });
+  $("ttsText").addEventListener("input", saveDraft);
+  $("voice1").addEventListener("change", saveDraft);
+  $("voice2").addEventListener("change", saveDraft);
+
+  [["segPeople", function (v) { S.people = Number(v); }],
+   ["segSource", function (v) { S.source = v; }],
+   ["segMode", function (v) { S.mode = v; }],
+   ["segSize", function (v) { S.size = v; }],
+   ["segOrder", null], ["segTeacache", null], ["segTile", null], ["segT5", null]
+  ].forEach(function (row) {
+    $(row[0]).querySelectorAll("button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        if (b.disabled) return;
+        setSeg(row[0], b.dataset.v);
+        if (row[1]) row[1](b.dataset.v);
+        syncAll();
+      });
+    });
+  });
+  [["stepsSl", "stepsVal", 0], ["textSl", "textVal", 1], ["audioSl", "audioVal", 1],
+   ["shiftSl", "shiftVal", 1]].forEach(function (row) {
+    $(row[0]).addEventListener("input", function (e) {
+      $(row[1]).textContent = Number(e.target.value).toFixed(row[2]);
+      syncCost(); saveDraft(); });
+  });
+
+  $("btnImage").addEventListener("click", function () { $("imageFile").click(); });
+  $("imageFile").addEventListener("change", async function (e) {
+    var r = await upload(e.target, "image");
+    if (r) { S.image = r; syncAll(); } });
+  $("btnAudio1").addEventListener("click", function () { $("audio1File").click(); });
+  $("audio1File").addEventListener("change", async function (e) {
+    var r = await upload(e.target, "audio");
+    if (r) { S.audio1 = r; syncAll(); } });
+  $("btnAudio2").addEventListener("click", function () { $("audio2File").click(); });
+  $("audio2File").addEventListener("change", async function (e) {
+    var r = await upload(e.target, "audio");
+    if (r) { S.audio2 = r; syncAll(); } });
+
+  $("btnSettings").addEventListener("click", function () {
+    var pop = $("settingsPop"), open = !pop.hidden;
+    pop.hidden = true;
+    if (!open) placePop(pop, $("btnSettings"));
+  });
+  $("btnCloseSettings").addEventListener("click", function () { $("settingsPop").hidden = true; });
+  document.addEventListener("pointerdown", function (e) {
+    var pop = $("settingsPop");
+    if (!pop.hidden && !pop.contains(e.target) && !$("btnSettings").contains(e.target))
+      pop.hidden = true;
+  });
+  $("btnSeedClear").addEventListener("click", function () { $("seed").value = ""; });
+  $("btnResetOpts").addEventListener("click", function () {
+    applyDefaults(true); $("seed").value = ""; toast("Back to the model's defaults."); });
+  $("btnGenerate").addEventListener("click", generate);
+  $("libSearch").addEventListener("input", function (e) {
+    S.libFilter = e.target.value; renderLib(); });
+
+  $("lbClose").addEventListener("click", closeLightbox);
+  $("lbReuse").addEventListener("click", function () { if (S.lightbox) reuse(S.lightbox); });
+  $("lbVary").addEventListener("click", function () {
+    if (!S.lightbox) return;
+    reuse(S.lightbox); $("seed").value = ""; generate(); });
+  $("lbDownload").addEventListener("click", function () {
+    if (S.lightbox) window.open("/api/clip/" + S.lightbox.id, "_blank"); });
+  $("lbDelete").addEventListener("click", function () {
+    if (S.lightbox) removeClip(S.lightbox); });
+
+  $("btnRecheck").addEventListener("click", function () { loadDeps(true); refreshStatus(); });
+  $("btnInstallAll").addEventListener("click", installAllMissing);
+  $("btnReRun").addEventListener("click", openSetup);
+  $("btnPreflight").addEventListener("click", loadPreflight);
+  $("btnCancelTask").addEventListener("click", function () {
+    if (S.taskId) api("/api/tasks/" + S.taskId + "/cancel", { method: "POST" }); });
+  $("btnSaveTorch").addEventListener("click", async function () {
+    try {
+      await postJson("/api/config", { torch_index: $("torchIndex").value });
+      toast("Saved. Reinstall PyTorch to use it.");
+    } catch (e) { toast(e.message, true); }
+  });
+  $("btnSaveHf").addEventListener("click", async function () {
+    var b = { endpoint: $("hfEndpoint").value.trim() };
+    if ($("hfToken").value) b.token = $("hfToken").value;
+    try { await postJson("/api/hf/settings", b); $("hfToken").value = ""; loadHf(); toast("Saved."); }
+    catch (e) { toast(e.message, true); }
+  });
+
+  $("btnRunSetup").addEventListener("click", runSetup);
+  $("setupRetry").addEventListener("click", openSetup);
+  $("btnSkipSetup").addEventListener("click", function () { $("veilSetup").hidden = true; });
+  $("setupHide").addEventListener("click", function () { $("veilSetup").hidden = true; });
+  $("setupDone").addEventListener("click", function () {
+    $("veilSetup").hidden = true; show("create"); });
+  $("btnCloseCfg").addEventListener("click", function () { $("veilSettings").hidden = true; });
+  $("btnSaveCfg").addEventListener("click", async function () {
+    try {
+      await postJson("/api/config", { engine_dir: $("cfgEngine").value.trim(),
+                                      weights_dir: $("cfgWeights").value.trim() });
+      toast("Saved."); refreshStatus();
+    } catch (e) { toast(e.message, true); }
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && S.view === "create") {
+      e.preventDefault(); generate(); }
+    if (e.key === "Escape") {
+      if (!$("lightbox").hidden) { closeLightbox(); return; }
+      $("settingsPop").hidden = true;
+      $("veilSettings").hidden = true;
+      if ($("setupProgress").hidden) $("veilSetup").hidden = true;
+    }
+  });
+}
+
+/* ========================= boot ========================= */
+wire();
+loadDraft();
+syncAll();
+show("create");
+refreshStatus();
+loadClips();
+pollJobs();
+pollTasks();
+setInterval(refreshStatus, 6000);
+</script>
+</body>
+</html>
