@@ -42,7 +42,7 @@ def _validate_args(args):
         args.sample_steps = 40
 
     if args.sample_shift is None:
-        if args.size == 'multitalk-480':
+        if args.size in ('multitalk-240', 'multitalk-360', 'multitalk-480'):
             args.sample_shift = 7
         elif args.size == 'multitalk-720':
             args.sample_shift = 11
@@ -244,6 +244,25 @@ def _parse_args():
         default=None,
         help="Quantization type, must be 'int8' or 'fp8'."
     )
+    # --- MultiTalk Studio additions ---
+    parser.add_argument(
+        "--kokoro_dir",
+        type=str,
+        default="weights/Kokoro-82M",
+        help="The path to the Kokoro-82M TTS weights."
+    )
+    parser.add_argument(
+        "--vae_tile",
+        type=int,
+        default=0,
+        help="Spatial VAE tile size in latent pixels (0 = off). 32 suits an 8 GB card."
+    )
+    parser.add_argument(
+        "--vae_tile_overlap",
+        type=int,
+        default=8,
+        help="Overlap between VAE tiles in latent pixels."
+    )
     
     args = parser.parse_args()
 
@@ -297,7 +316,16 @@ def _init_logging(rank):
     else:
         logging.basicConfig(level=logging.ERROR)
 
+# The pipeline needs more audio frames than one clip has (frame_num at 25
+# fps); shorter speech is padded with silence rather than failing an
+# assertion deep in the run (MultiTalk Studio). Set from --frame_num.
+MIN_AUDIO_SAMPLES = 0
+
+
 def get_embedding(speech_array, wav2vec_feature_extractor, audio_encoder, sr=16000, device='cpu'):
+    if len(speech_array) < MIN_AUDIO_SAMPLES:
+        speech_array = np.concatenate(
+            [speech_array, np.zeros(MIN_AUDIO_SAMPLES - len(speech_array), dtype=speech_array.dtype)])
     audio_duration = len(speech_array) / sr
     video_length = audio_duration * 25 # Assume the video fps is 25
 
@@ -324,8 +352,9 @@ def get_embedding(speech_array, wav2vec_feature_extractor, audio_encoder, sr=160
 
 def extract_audio_from_video(filename, sample_rate):
     raw_audio_path = filename.split('/')[-1].split('.')[0]+'.wav'
+    from wan.utils.multitalk_utils import ffmpeg_exe
     ffmpeg_command = [
-        "ffmpeg",
+        ffmpeg_exe(),
         "-y",
         "-i",
         str(filename),
@@ -347,7 +376,8 @@ def extract_audio_from_video(filename, sample_rate):
 
 def audio_prepare_single(audio_path, sample_rate=16000):
     ext = os.path.splitext(audio_path)[1].lower()
-    if ext in ['.mp4', '.mov', '.avi', '.mkv']:
+    # m4a/aac need ffmpeg to decode on Windows, as video does
+    if ext in ['.mp4', '.mov', '.avi', '.mkv', '.m4a', '.aac']:
         human_speech_array = extract_audio_from_video(audio_path, sample_rate)
         return human_speech_array
     else:
@@ -355,10 +385,13 @@ def audio_prepare_single(audio_path, sample_rate=16000):
         human_speech_array = loudness_norm(human_speech_array, sr)
         return human_speech_array
 
+KOKORO_DIR = 'weights/Kokoro-82M'
+
+
 def process_tts_single(text, save_dir, voice1):    
     s1_sentences = []
 
-    pipeline = KPipeline(lang_code='a', repo_id='weights/Kokoro-82M')
+    pipeline = KPipeline(lang_code='a', repo_id=KOKORO_DIR)
 
     voice_tensor = torch.load(voice1, weights_only=True)
     generator = pipeline(
@@ -385,7 +418,7 @@ def process_tts_multi(text, save_dir, voice1, voice2):
     s1_sentences = []
     s2_sentences = []
 
-    pipeline = KPipeline(lang_code='a', repo_id='weights/Kokoro-82M')
+    pipeline = KPipeline(lang_code='a', repo_id=KOKORO_DIR)
     for idx, (speaker, content) in enumerate(matches):
         if speaker == '1':
             voice_tensor = torch.load(voice1, weights_only=True)
@@ -526,6 +559,11 @@ def generate(args):
     # read input files
 
     
+
+    global KOKORO_DIR
+    KOKORO_DIR = getattr(args, 'kokoro_dir', KOKORO_DIR) or KOKORO_DIR
+    global MIN_AUDIO_SAMPLES
+    MIN_AUDIO_SAMPLES = int((args.frame_num + 4) / 25 * 16000)
 
     with open(args.input_json, 'r', encoding='utf-8') as f:
         input_data = json.load(f)

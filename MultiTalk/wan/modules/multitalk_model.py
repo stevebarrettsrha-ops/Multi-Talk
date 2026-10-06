@@ -562,6 +562,10 @@ class WanModel(ModelMixin, ConfigMixin):
     ):
         print("teacache_init")
         self.enable_teacache = True
+        # the smaller buckets (MultiTalk Studio) were not calibrated; the
+        # 480 polynomial is the nearest fit
+        if model_scale not in ('multitalk-480', 'multitalk-720'):
+            model_scale = 'multitalk-480'
         
         self.__class__.cnt = 0
         self.__class__.num_steps = sample_steps*3

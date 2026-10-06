@@ -513,7 +513,7 @@ class WanVAE_(nn.Module):
         x_recon = self.decode(z)
         return x_recon, mu, log_var
 
-    def encode(self, x, scale):
+    def _encode_plain(self, x, scale):
         self.clear_cache()
         ## cache
         t = x.shape[2]
@@ -541,7 +541,7 @@ class WanVAE_(nn.Module):
         self.clear_cache()
         return mu
 
-    def decode(self, z, scale):
+    def _decode_plain(self, z, scale):
         self.clear_cache()
         # z: [b,c,t,h,w]
         if isinstance(scale[0], torch.Tensor):
@@ -566,6 +566,97 @@ class WanVAE_(nn.Module):
                 out = torch.cat([out, out_], 2)
         self.clear_cache()
         return out
+
+    # ------------------------------------------------------------------ #
+    # Spatial tiling (MultiTalk Studio).
+    #
+    # The decoder keeps every feature map of a four-frame chunk at full
+    # resolution; at 640x640 that is several gigabytes per map and the
+    # single largest allocation of a whole render on an 8 GB card. Tiling
+    # decodes (and encodes) overlapping spatial windows one at a time,
+    # each with its own causal feature cache so time stays correct, and
+    # blends them with a linear ramp across the overlap - the same scheme
+    # ComfyUI's tiled VAE uses. tile/overlap are in LATENT pixels (x8 for
+    # the picture). 0 means off.
+    # ------------------------------------------------------------------ #
+    tile_size = 0
+    tile_overlap = 8
+
+    @staticmethod
+    def _ramp_mask(h, w, oy, ox, top, left, bottom, right, device, dtype):
+        """Weights for one tile: 1 inside, a linear ramp down to 1/overlap
+        on every edge that meets another tile. Edges on the picture border
+        stay at 1 so nothing is darkened there."""
+        mask = torch.ones(1, 1, 1, h, w, device=device, dtype=dtype)
+        if oy > 0:
+            ramp = torch.linspace(1.0 / oy, 1.0, oy, device=device, dtype=dtype)
+            if top:
+                mask[..., :oy, :] *= ramp.view(1, 1, 1, oy, 1)
+            if bottom:
+                mask[..., h - oy:, :] *= ramp.flip(0).view(1, 1, 1, oy, 1)
+        if ox > 0:
+            ramp = torch.linspace(1.0 / ox, 1.0, ox, device=device, dtype=dtype)
+            if left:
+                mask[..., :, :ox] *= ramp.view(1, 1, 1, 1, ox)
+            if right:
+                mask[..., :, w - ox:] *= ramp.flip(0).view(1, 1, 1, 1, ox)
+        return mask
+
+    @staticmethod
+    def _tile_starts(size, tile, overlap):
+        """Window starts covering [0, size) with `tile`-wide windows that
+        overlap by `overlap`; the last window is pulled back to the edge."""
+        if size <= tile:
+            return [0]
+        step = max(1, tile - overlap)
+        starts = list(range(0, size - tile, step)) + [size - tile]
+        return sorted(set(starts))
+
+    def _tiled(self, x, fn, tile, overlap, scale_out):
+        """Run fn over spatial tiles of x and blend. scale_out is the size
+        ratio of fn's output to its input (8 for decode, 1/8 for encode)."""
+        _, _, _, h, w = x.shape
+        tile = max(int(tile), 1)
+        overlap = max(0, min(int(overlap), tile // 2))
+        ys, xs = self._tile_starts(h, tile, overlap), self._tile_starts(w, tile, overlap)
+        out = None
+        weight = None
+        for y0 in ys:
+            for x0 in xs:
+                y1, x1 = min(y0 + tile, h), min(x0 + tile, w)
+                piece = fn(x[:, :, :, y0:y1, x0:x1])
+                oy0, ox0 = int(round(y0 * scale_out)), int(round(x0 * scale_out))
+                ph, pw = piece.shape[-2], piece.shape[-1]
+                if out is None:
+                    oh, ow = int(round(h * scale_out)), int(round(w * scale_out))
+                    out = torch.zeros(piece.shape[0], piece.shape[1], piece.shape[2],
+                                      oh, ow, device=piece.device, dtype=piece.dtype)
+                    weight = torch.zeros(1, 1, 1, oh, ow, device=piece.device,
+                                         dtype=piece.dtype)
+                ov = int(round(overlap * scale_out))
+                mask = self._ramp_mask(ph, pw, min(ov, ph), min(ov, pw),
+                                       top=y0 > 0, left=x0 > 0,
+                                       bottom=y1 < h, right=x1 < w,
+                                       device=piece.device, dtype=piece.dtype)
+                out[..., oy0:oy0 + ph, ox0:ox0 + pw] += piece * mask
+                weight[..., oy0:oy0 + ph, ox0:ox0 + pw] += mask
+                del piece
+        return out / weight
+
+    def encode(self, x, scale):
+        tile = int(self.tile_size or 0)
+        # encode works in pixels: a latent tile is eight picture pixels
+        if tile and (x.shape[-1] > tile * 8 or x.shape[-2] > tile * 8):
+            return self._tiled(x, lambda p: self._encode_plain(p, scale),
+                               tile * 8, int(self.tile_overlap) * 8, 1 / 8)
+        return self._encode_plain(x, scale)
+
+    def decode(self, z, scale):
+        tile = int(self.tile_size or 0)
+        if tile and (z.shape[-1] > tile or z.shape[-2] > tile):
+            return self._tiled(z, lambda p: self._decode_plain(p, scale),
+                               tile, int(self.tile_overlap), 8)
+        return self._decode_plain(z, scale)
 
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
@@ -643,6 +734,12 @@ class WanVAE:
             pretrained_path=vae_pth,
             z_dim=z_dim,
         ).eval().requires_grad_(False).to(device)
+
+    def set_tiling(self, tile_size=0, tile_overlap=8):
+        """Spatial tiling in latent pixels (x8 for the picture); 0 is off.
+        32 with an overlap of 8 is a good setting for an 8 GB card."""
+        self.model.tile_size = int(tile_size or 0)
+        self.model.tile_overlap = int(tile_overlap or 0)
 
     def encode(self, videos):
         """

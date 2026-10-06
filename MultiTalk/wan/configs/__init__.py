@@ -37,6 +37,9 @@ SIZE_CONFIGS = {
     '1024*1024': (1024, 1024),
     'multitalk-480': (640, 640),
     'multitalk-720': (960, 960),
+    # smaller buckets for small cards (MultiTalk Studio)
+    'multitalk-360': (480, 480),
+    'multitalk-240': (320, 320),
 }
 
 MAX_AREA_CONFIGS = {
@@ -54,5 +57,5 @@ SUPPORTED_SIZES = {
     't2i-14B': tuple(SIZE_CONFIGS.keys()),
     'vace-1.3B': ('480*832', '832*480'),
     'vace-14B': ('720*1280', '1280*720', '480*832', '832*480'),
-    'multitalk-14B': ('multitalk-480', 'multitalk-720'),
+    'multitalk-14B': ('multitalk-240', 'multitalk-360', 'multitalk-480', 'multitalk-720'),
 }

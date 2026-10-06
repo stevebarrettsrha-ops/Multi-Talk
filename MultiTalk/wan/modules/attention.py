@@ -3,12 +3,22 @@ import torch
 import torch.nn as nn
 from einops import rearrange, repeat
 from ..utils.multitalk_utils import RotaryPositionalEmbedding1D, normalize_and_scale, split_token_counts_and_frame_ids
-from xfuser.core.distributed import (
-    get_sequence_parallel_rank,
-    get_sequence_parallel_world_size,
-    get_sp_group,
-)
-import xformers.ops
+try:
+    from xfuser.core.distributed import (
+        get_sequence_parallel_rank,
+        get_sequence_parallel_world_size,
+        get_sp_group,
+    )
+except ImportError:  # single-GPU runs do not need xfuser
+    from ..utils.multitalk_utils import (
+        get_sequence_parallel_rank,
+        get_sequence_parallel_world_size,
+        get_sp_group,
+    )
+try:
+    import xformers.ops
+except ImportError:  # named at the point of use
+    xformers = None
 
 try:
     import flash_attn_interface
@@ -24,10 +34,60 @@ except ModuleNotFoundError:
 
 import warnings
 
+
+def _memory_efficient_attention(q, k, v, attn_bias=None):
+    """xformers' memory_efficient_attention, or PyTorch SDPA without it
+    (MultiTalk Studio). Layout is xformers' [B, M, H, K]. A block-diagonal
+    bias only occurs in multi-GPU sequence-parallel runs, which still need
+    xformers."""
+    if xformers is not None:
+        return xformers.ops.memory_efficient_attention(q, k, v, attn_bias=attn_bias, op=None,)
+    if attn_bias is not None:
+        raise RuntimeError("Sequence-parallel audio attention needs xformers.")
+    x = torch.nn.functional.scaled_dot_product_attention(
+        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2))
+    return x.transpose(1, 2)
+
 __all__ = [
     'flash_attention',
     'attention',
 ]
+
+
+def _sdpa_varlen(q, k, v, q_lens, k_lens, softmax_scale, q_scale, causal,
+                 dtype):
+    """flash_attention without flash-attn (MultiTalk Studio).
+
+    flash-attn ships no Windows wheels, and the model calls flash_attention
+    directly, so without this a stock Windows install cannot run at all.
+    Each batch item is cut to its true lengths and run through PyTorch's
+    scaled_dot_product_attention, which picks its own fused kernel on the
+    GPU. Shapes and the zero padding past q_lens match the flash path.
+    """
+    half_dtypes = (torch.float16, torch.bfloat16)
+    b, lq, out_dtype = q.size(0), q.size(1), q.dtype
+    outs = []
+    for i in range(b):
+        ql = int(q_lens[i]) if q_lens is not None else lq
+        kl = int(k_lens[i]) if k_lens is not None else k.size(1)
+        qi, ki, vi = q[i, :ql], k[i, :kl], v[i, :kl]
+        if qi.dtype not in half_dtypes:
+            qi, ki, vi = qi.to(dtype), ki.to(dtype), vi.to(dtype)
+        ki, vi = ki.to(qi.dtype), vi.to(qi.dtype)
+        if q_scale is not None:
+            qi = qi * q_scale
+        if ki.size(1) != qi.size(1):  # grouped heads: Nq divisible by Nk
+            rep = qi.size(1) // ki.size(1)
+            ki = ki.repeat_interleave(rep, dim=1)
+            vi = vi.repeat_interleave(rep, dim=1)
+        x = torch.nn.functional.scaled_dot_product_attention(
+            qi.transpose(0, 1).unsqueeze(0), ki.transpose(0, 1).unsqueeze(0),
+            vi.transpose(0, 1).unsqueeze(0), is_causal=causal,
+            scale=softmax_scale).squeeze(0).transpose(0, 1)
+        if ql < lq:
+            x = torch.cat([x, x.new_zeros(lq - ql, *x.shape[1:])], dim=0)
+        outs.append(x)
+    return torch.stack(outs).type(out_dtype)
 
 
 def flash_attention(
@@ -60,6 +120,9 @@ def flash_attention(
     """
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
+    if not (FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE):
+        return _sdpa_varlen(q, k, v, q_lens, k_lens, softmax_scale, q_scale,
+                            causal, dtype)
     assert q.device.type == 'cuda' and q.size(-1) <= 256
 
     # params
@@ -263,7 +326,7 @@ class SingleStreamAttention(nn.Module):
             attn_bias = xformers.ops.fmha.attn_bias.BlockDiagonalMask.from_seqlens(visual_seqlen, kv_seq)
         else:
             attn_bias = None
-        x = xformers.ops.memory_efficient_attention(q, encoder_k, encoder_v, attn_bias=attn_bias, op=None,)
+        x = _memory_efficient_attention(q, encoder_k, encoder_v, attn_bias=attn_bias)
         x = rearrange(x, "B M H K -> B H M K") 
 
         # linear transform
@@ -377,7 +440,7 @@ class SingleStreamMutiAttention(SingleStreamAttention):
         q = rearrange(q, "B H M K -> B M H K")
         encoder_k = rearrange(encoder_k, "B H M K -> B M H K")
         encoder_v = rearrange(encoder_v, "B H M K -> B M H K")
-        x = xformers.ops.memory_efficient_attention(q, encoder_k, encoder_v, attn_bias=None, op=None,)
+        x = _memory_efficient_attention(q, encoder_k, encoder_v, attn_bias=None)
         x = rearrange(x, "B M H K -> B H M K")
 
         # linear transform

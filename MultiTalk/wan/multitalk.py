@@ -396,10 +396,14 @@ class MultiTalkPipeline:
         
         # decide a proper size
         bucket_config_module = importlib.import_module("wan.utils.multitalk_utils")
-        if size_buckget == 'multitalk-480':
-            bucket_config = getattr(bucket_config_module, 'ASPECT_RATIO_627')
-        elif size_buckget == 'multitalk-720':
-            bucket_config = getattr(bucket_config_module, 'ASPECT_RATIO_960')
+        bucket_config = bucket_config_module.BUCKET_TABLES[size_buckget]
+
+        # spatial VAE tiling (MultiTalk Studio): the decoder's full-size
+        # feature maps are the biggest single allocation on a small card
+        vae_tile = int(getattr(extra_args, 'vae_tile', 0) or 0) if extra_args is not None else 0
+        vae_tile_overlap = int(getattr(extra_args, 'vae_tile_overlap', 8) or 0) if extra_args is not None else 8
+        if hasattr(self.vae, 'set_tiling'):
+            self.vae.set_tiling(vae_tile, vae_tile_overlap)
 
         src_h, src_w = cond_image.height, cond_image.width
         ratio = src_h / src_w
@@ -442,6 +446,15 @@ class MultiTalkPipeline:
         
         assert len(full_audio_embs) == HUMAN_NUMBER, f"Aduio file not exists or length not satisfies frame nums."
 
+        # how many clips this render takes (MultiTalk Studio reads this line
+        # for its progress bar): the first clip covers frame_num frames, each
+        # later one adds frame_num - motion_frame
+        _target = min(max_frames_num, len(full_audio_embs[0]))
+        _step = max(1, frame_num - motion_frame)
+        _clips = 1 if max_frames_num <= frame_num else \
+            1 + max(0, math.ceil((_target - frame_num) / _step))
+        logging.info(f"[clips] total={_clips} frames={_target} steps={sampling_steps}")
+
         # preprocess text embedding
         if n_prompt == "":
             n_prompt = self.sample_neg_prompt
@@ -477,7 +490,10 @@ class MultiTalkPipeline:
         torch.backends.cudnn.deterministic = True
 
         # start video generation iteratively
+        clip_index = 0
         while True:
+            clip_index += 1
+            logging.info(f"[clip] {clip_index} start_frame={audio_start_idx} frames={clip_length}")
             audio_embs = []
             # split audio with window size
             for human_idx in range(HUMAN_NUMBER):   

@@ -4,11 +4,22 @@ from einops import rearrange
 import torch
 import torch.nn as nn
 
-from xfuser.core.distributed import (
-    get_sequence_parallel_rank,
-    get_sequence_parallel_world_size,
-    get_sp_group,
-)
+try:
+    from xfuser.core.distributed import (
+        get_sequence_parallel_rank,
+        get_sequence_parallel_world_size,
+        get_sp_group,
+    )
+except ImportError:  # xfuser is only needed for multi-GPU (ulysses/ring) runs
+    def get_sequence_parallel_rank():
+        return 0
+
+    def get_sequence_parallel_world_size():
+        return 1
+
+    def get_sp_group():
+        raise RuntimeError("xfuser is not installed; multi-GPU sequence "
+                           "parallelism is unavailable.")
 from einops import rearrange, repeat
 from functools import lru_cache
 import imageio
@@ -30,6 +41,21 @@ ASPECT_RATIO_627 = {
      '3.60': ([1152, 320], 1), '3.80': ([1216, 320], 1), '4.00': ([1280, 320], 1)}
 
 
+# Smaller buckets for small cards (MultiTalk Studio). Scaled from the 627
+# table (0.75x and 0.5x, snapped to multiples of 32); the keys stay the
+# h/w ratios the picker matches against.
+ASPECT_RATIO_480 = {
+     '0.26': ([256, 928], 1),  '0.38': ([288, 768], 1), '0.50': ([352, 672], 1), '0.67': ([384, 576], 1),
+     '0.82': ([448, 544], 1),  '1.00': ([480, 480], 1), '1.22': ([544, 448], 1), '1.50': ([576, 384], 1),
+     '1.86': ([640, 352], 1),  '2.00': ([672, 352], 1), '2.50': ([736, 288], 1), '2.83': ([832, 288], 1),
+     '3.60': ([864, 256], 1),  '3.80': ([928, 256], 1), '4.00': ([960, 256], 1)}
+
+ASPECT_RATIO_320 = {
+     '0.26': ([160, 608], 1),  '0.38': ([192, 512], 1), '0.50': ([224, 448], 1), '0.67': ([256, 384], 1),
+     '0.82': ([288, 352], 1),  '1.00': ([320, 320], 1), '1.22': ([352, 288], 1), '1.50': ([384, 256], 1),
+     '1.86': ([416, 224], 1),  '2.00': ([448, 224], 1), '2.50': ([480, 192], 1), '2.83': ([544, 192], 1),
+     '3.60': ([576, 160], 1),  '3.80': ([608, 160], 1), '4.00': ([640, 160], 1)}
+
 ASPECT_RATIO_960 = {
      '0.22': ([448, 2048], 1), '0.29': ([512, 1792], 1), '0.36': ([576, 1600], 1), '0.45': ([640, 1408], 1), 
      '0.55': ([704, 1280], 1), '0.63': ([768, 1216], 1), '0.76': ([832, 1088], 1), '0.88': ([896, 1024], 1), 
@@ -37,6 +63,15 @@ ASPECT_RATIO_960 = {
      '1.58': ([1216, 768], 1), '1.82': ([1280, 704], 1), '1.91': ([1344, 704], 1), '2.20': ([1408, 640], 1), 
      '2.30': ([1472, 640], 1), '2.67': ([1536, 576], 1), '2.89': ([1664, 576], 1), '3.62': ([1856, 512], 1), 
      '3.75': ([1920, 512], 1)}
+
+# size bucket name -> table (MultiTalk Studio)
+BUCKET_TABLES = {
+    'multitalk-240': ASPECT_RATIO_320,
+    'multitalk-360': ASPECT_RATIO_480,
+    'multitalk-480': ASPECT_RATIO_627,
+    'multitalk-720': ASPECT_RATIO_960,
+}
+
 
 
 
@@ -234,6 +269,19 @@ def cache_video(tensor,
         writer.close()
         return cache_file
 
+def ffmpeg_exe():
+    """ffmpeg on PATH, else the binary imageio-ffmpeg ships with."""
+    import shutil
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
 def save_video_ffmpeg(gen_video_samples, save_path, vocal_audio_list, fps=25, quality=5, high_quality_save=False):
     
     def save_video(frames, save_path, fps, quality=9, ffmpeg_params=None):
@@ -267,7 +315,8 @@ def save_video_ffmpeg(gen_video_samples, save_path, vocal_audio_list, fps=25, qu
     duration = T / fps
     save_path_crop_audio = save_path + "-cropaudio.wav"
     final_command = [
-        "ffmpeg",
+        ffmpeg_exe(),
+        "-y",
         "-i",
         vocal_audio_list[0],
         "-t",
@@ -279,7 +328,7 @@ def save_video_ffmpeg(gen_video_samples, save_path, vocal_audio_list, fps=25, qu
     save_path = save_path + ".mp4"
     if high_quality_save:
         final_command = [
-            "ffmpeg",
+            ffmpeg_exe(),
             "-y",
             "-i", save_path_tmp,
             "-i", save_path_crop_audio,
@@ -295,7 +344,7 @@ def save_video_ffmpeg(gen_video_samples, save_path, vocal_audio_list, fps=25, qu
         os.remove(save_path_crop_audio)
     else:
         final_command = [
-            "ffmpeg",
+            ffmpeg_exe(),
             "-y",
             "-i",
             save_path_tmp,
