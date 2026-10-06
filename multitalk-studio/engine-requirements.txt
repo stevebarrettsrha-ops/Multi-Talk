@@ -1,0 +1,31 @@
+# The MultiTalk engine's own packages, installed into engine-venv by setup.
+# PyTorch is installed first, separately, from the PyTorch index
+# (torch 2.4.1 / torchvision 0.19.1 / torchaudio 2.4.1, cu121).
+# xfuser, dashscope and flash-attn are left out on purpose: the first two are
+# only for multi-GPU runs and prompt extension, and flash-attn has no Windows
+# wheels — the engine falls back to PyTorch attention without it.
+numpy>=1.23.5,<2
+opencv-python>=4.9.0.80,<4.12
+diffusers>=0.31.0,<0.36
+transformers==4.49.0
+tokenizers>=0.21,<0.22
+accelerate>=1.1.1
+safetensors>=0.4.3
+optimum-quanto==0.2.6
+huggingface_hub>=0.26
+sentencepiece
+protobuf
+tqdm
+imageio
+imageio-ffmpeg
+easydict
+ftfy
+regex
+scikit-image
+loguru
+pyloudnorm
+librosa
+soundfile
+einops
+psutil
+misaki[en]>=0.7.4
