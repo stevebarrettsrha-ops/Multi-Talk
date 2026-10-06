@@ -1,6 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import gc
-from inspect import ArgSpec
+# (upstream imported inspect.ArgSpec here, unused; it was removed in Python 3.11)
 import logging
 import json
 import math

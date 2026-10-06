@@ -76,7 +76,9 @@ The first launch opens the setup sheet. It runs these steps:
 3. Installs PyTorch 2.4.1 (CUDA 12.1) and, optionally, xformers.
 4. Installs the engine's packages from `engine-requirements.txt`.
 5. Downloads the weights into `../MultiTalk/weights/`, resumably.
-6. Asks the new environment whether it can import everything.
+6. Imports the real engine in the new environment and runs its argument
+   parser, so a package or code problem shows up here rather than at your
+   first render.
 
 Each step shows live progress. A failed or cancelled download keeps what
 arrived and resumes next time.
@@ -176,3 +178,9 @@ code. Upstream behaviour is unchanged unless a new option is used.
 - **Short audio is padded** to one clip's length instead of failing an
   assertion. M4A and AAC are decoded through ffmpeg.
 - **`--kokoro_dir`** points TTS at the downloaded weights.
+- **Runs on Python 3.11 and 3.12.** Upstream imported `inspect.ArgSpec`,
+  which Python 3.11 removed, so the engine crashed at start on anything
+  newer than 3.10. The import was unused and is gone.
+- **Imports without a GPU.** The T5 module asked CUDA for a device at import
+  time. It now asks when the encoder is built, so Setup's last step can
+  import the whole engine to prove it loads.
