@@ -445,8 +445,10 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
         notes.append(f"{free_disk / 1e9:.0f} GB free where the weights go; "
                      f"the set needs ~{download / 1e9:.0f} GB.")
     if not vram:
-        notes.append("Could not read the GPU yet — install PyTorch on the "
-                     "Engine page, then measure again.")
+        notes.append("Could not read an NVIDIA GPU. Before setup that is "
+                     "expected — PyTorch is not installed yet. After setup it "
+                     "means PyTorch cannot see the card: update the NVIDIA "
+                     "driver, then press Measure again.")
     if verdict == "hard":
         notes.append("It will still install and queue; it may simply be too "
                      "slow to use.")
@@ -941,6 +943,25 @@ def check_engine(python: str) -> dict:
     return d
 
 
+def check_engine_loads(python: str, eng: Path) -> tuple[bool, str]:
+    """Import the real engine in its environment, as a render would, and run
+    its argument parser. Finding the packages is not enough: an engine file
+    that will not import (a name a newer Python removed, say) only shows
+    here. Needs no GPU."""
+    if not (eng / "generate_multitalk.py").exists():
+        return False, f"No generate_multitalk.py in {eng}."
+    try:
+        out = _run([python, "generate_multitalk.py", "--help"], cwd=str(eng),
+                   timeout=600, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+    if out.returncode == 0 and "--vae_tile" in out.stdout:
+        return True, ""
+    lines = [ln for ln in (out.stderr or out.stdout).strip().splitlines()
+             if ln.strip() and not ln.startswith(" ")]
+    return False, (lines[-1] if lines else f"exit code {out.returncode}")[:300]
+
+
 def make_venv(python: str, log) -> Path:
     vpy = venv_python()
     if vpy.exists():
@@ -1061,6 +1082,10 @@ def run_setup(cfg: dict, prog: Progress) -> None:
             raise RuntimeError("The engine environment is missing: "
                                + ", ".join(report.get("missing") or [])
                                + (report.get("error") or ""))
+        prog.track("check", None, "Loading the engine's code…")
+        loads, why = check_engine_loads(str(vpy), eng)
+        if not loads:
+            raise RuntimeError("The engine's code would not load: " + why)
         prog.finish("check", f"torch {report['torch']}"
                     + (" · CUDA" if report.get("cuda") else " · no GPU found")
                     + (" · xformers" if report.get("xformers") else ""))

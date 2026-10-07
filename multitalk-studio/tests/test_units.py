@@ -203,6 +203,27 @@ def run(slow: bool = False) -> Suite:
             "error" not in rep and isinstance(rep.get("missing"), list)
             and "torch" in rep, str(rep)[:200])
 
+    # -- setup's last step imports the engine, not just its packages ---------
+    import shutil as _sh
+    fake = ROOT / "tests" / "fake_engine"
+    ok, why = bootstrap.check_engine_loads(sys.executable, fake)
+    s.check("the load check passes an engine that imports and parses", ok, why)
+    with tempfile.TemporaryDirectory() as tmp:
+        broken = Path(tmp) / "eng"
+        _sh.copytree(fake, broken)
+        src_ = (broken / "generate_multitalk.py").read_text()
+        (broken / "generate_multitalk.py").write_text(
+            "from inspect import ArgSpec\n" + src_)
+        ok, why = bootstrap.check_engine_loads(sys.executable, broken)
+        s.check("and fails one that cannot import, naming why",
+                not ok and "ArgSpec" in why, why)
+    s.check("the real engine no longer imports inspect.ArgSpec (gone in 3.11)",
+            "from inspect import ArgSpec" not in
+            (REAL_ENGINE / "wan/multitalk.py").read_text())
+    s.check("importing the real T5 module no longer needs a GPU",
+            "device=torch.cuda.current_device()," not in
+            (REAL_ENGINE / "wan/modules/t5.py").read_text())
+
     # -- the weight set ------------------------------------------------------
     items = bootstrap.model_set(cfg)
     names = {i["path"] for i in items}

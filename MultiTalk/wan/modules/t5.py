@@ -480,7 +480,7 @@ class T5EncoderModel:
         self,
         text_len,
         dtype=torch.bfloat16,
-        device=torch.cuda.current_device(),
+        device=None,  # was torch.cuda.current_device(), evaluated at import
         checkpoint_path=None,
         tokenizer_path=None,
         shard_fn=None,
@@ -488,6 +488,10 @@ class T5EncoderModel:
         quant_dir=None
     ):
         assert quant is None or quant in ("int8", "fp8")
+        # resolved here rather than in the signature, so importing the module
+        # needs no GPU (MultiTalk Studio's setup check imports the engine)
+        if device is None:
+            device = torch.cuda.current_device()
         self.text_len = text_len
         self.dtype = dtype
         self.device = device

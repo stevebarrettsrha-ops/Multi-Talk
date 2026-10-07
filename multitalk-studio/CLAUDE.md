@@ -50,6 +50,14 @@ README. `../MultiTalk/tests/test_lowvram_patches.py` checks the tiled VAE
 against the plain one, the SDPA fallbacks against plain softmax attention,
 and the new buckets, on CPU with random weights.
 
+## Setup's last step imports the engine
+
+`bootstrap.check_engine_loads()` runs `generate_multitalk.py --help` in the
+engine environment. Finding the packages is not enough: the first real
+run-through found upstream's `from inspect import ArgSpec`, which crashes on
+Python 3.11+, and only an import shows that. Keep the engine importable
+without a GPU (no CUDA calls at import time) so this check works anywhere.
+
 ## Validation gate
 
 ```bash
