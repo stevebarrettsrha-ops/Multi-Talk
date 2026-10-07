@@ -686,12 +686,16 @@ _PIP_RAW_OK: dict[str, bool] = {}
 
 
 def pip_has_raw_progress(python: str) -> bool:
+    """Whether this pip takes --progress-bar raw (pip 24.1 and newer).
+
+    Asked by letting pip parse the flag: an older pip rejects the choice
+    and exits 2, a newer one prints its help and exits 0. Reading the help
+    text instead broke on how the console wraps it."""
     if python not in _PIP_RAW_OK:
-        ok = False
         try:
-            out = _run([python, "-m", "pip", "install", "--help"], timeout=60)
-            at = out.stdout.find("--progress-bar")
-            ok = at >= 0 and "raw" in out.stdout[at:at + 300]
+            out = _run([python, "-m", "pip", "install", "--progress-bar", "raw",
+                        "--help"], timeout=60)
+            ok = out.returncode == 0
         except Exception:  # noqa: BLE001
             ok = False
         _PIP_RAW_OK[python] = ok
@@ -720,8 +724,8 @@ def pip_install(python: str, args: list[str], log, on_pct=None,
             now = time.time()
             if got < cur["base"] or not cur["started"]:
                 cur["base"], cur["started"] = got, now
-            if now - cur["last"] < 0.4 and not (total and got >= total):
-                return
+            # pip already limits raw progress to four lines a second; every
+            # one is passed on, so a fast wheel still shows its middle
             cur["last"] = now
             speed = (got - cur["base"]) / max(now - cur["started"], .1)
             eta = (total - got) / speed if speed > 0 and total else 0

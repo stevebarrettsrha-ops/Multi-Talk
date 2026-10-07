@@ -224,6 +224,48 @@ def run(slow: bool = False) -> Suite:
             "device=torch.cuda.current_device()," not in
             (REAL_ENGINE / "wan/modules/t5.py").read_text())
 
+    # -- progress reporting ----------------------------------------------------
+    import subprocess as _sp
+    ver = _sp.run([sys.executable, "-m", "pip", "--version"], capture_output=True,
+                  text=True).stdout.split()[1]
+    want = tuple(int(x) for x in ver.split(".")[:2]) >= (24, 1)
+    bootstrap._PIP_RAW_OK.clear()
+    s.equal(f"raw pip progress is detected by asking pip itself (pip {ver})",
+            bootstrap.pip_has_raw_progress(sys.executable), want)
+    real_stream = bootstrap.stream
+    try:
+        def fake_stream(cmd, on_line, **kw):
+            for ln in ("Downloading torch-2.4.1-cp311-none.whl (797 MB)",
+                       "Progress 0 of 800", "Progress 200 of 800",
+                       "Progress 400 of 800", "Progress 800 of 800",
+                       "Installing collected packages: torch"):
+                on_line(ln)
+            return 0
+        bootstrap.stream = fake_stream
+        bootstrap._PIP_RAW_OK["fake-python"] = True
+        calls = []
+        bootstrap.pip_install("fake-python", ["torch"], lambda m: None,
+                              lambda pct, d: calls.append(pct))
+        s.equal("every pip progress line reaches the bar, none dropped",
+                calls, [0.0, 25.0, 50.0, 100.0, None])
+    finally:
+        bootstrap.stream = real_stream
+        bootstrap._PIP_RAW_OK.pop("fake-python", None)
+    tasks = manager.Tasks()
+    big = tasks.add(manager.Task("download", "the 16 GB model"))
+    for i in range(30):
+        tasks.add(manager.Task("download", f"small {i}")).set(state="done")
+    for i in range(3):
+        tasks.add(manager.Task("download", f"running {i}"))
+    shown = tasks.visible()
+    s.check("the task list never drops a running download, however old",
+            big in shown and sum(t.state == "running" for t in shown) == 4)
+    s.equal("and still caps the finished ones",
+            sum(t.state == "done" for t in shown), 25)
+    t = manager.Task("download", "x")
+    s.check("a task reports bytes and whether it is merely busy",
+            {"got", "total", "busy"} <= set(t.view()))
+
     # -- the weight set ------------------------------------------------------
     items = bootstrap.model_set(cfg)
     names = {i["path"] for i in items}

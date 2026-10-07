@@ -377,7 +377,8 @@ def api_tasks():
         if not task:
             return jsonify({"error": "No such task."}), 404
         return jsonify(task.view(since))
-    return jsonify([t.view(t.view()["cursor"]) for t in manager.TASKS.list()[:25]])
+    return jsonify([t.view(t.view()["cursor"])
+                    for t in manager.TASKS.visible()])
 
 
 @app.post("/api/tasks/<task_id>/cancel")

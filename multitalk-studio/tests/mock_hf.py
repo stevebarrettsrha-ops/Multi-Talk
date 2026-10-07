@@ -7,7 +7,7 @@ from flask import Flask, Response, jsonify, request
 
 app = Flask(__name__)
 LOG = []
-MODE = {"cut_after": 0}
+MODE = {"cut_after": 0, "slow": 0.0}   # slow: seconds per 8 kB chunk
 
 REPOS = {
     "MeiGen-AI/MeiGen-MultiTalk": {
@@ -103,6 +103,15 @@ def resolve(org, name, rest):
     headers = {"Content-Length": str(len(chunk))}
     if start:
         headers["Content-Range"] = f"bytes {start}-{len(data) - 1}/{len(data)}"
+    if MODE["slow"] and len(chunk) >= 50_000:
+        # slow enough for a browser test to watch a bar move
+        import time
+
+        def trickle():
+            for i in range(0, len(chunk), 8192):
+                time.sleep(MODE["slow"])
+                yield chunk[i:i + 8192]
+        return Response(trickle(), status=status, headers=headers)
     return Response(chunk, status=status, headers=headers)
 
 

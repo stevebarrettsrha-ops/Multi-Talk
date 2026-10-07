@@ -28,6 +28,9 @@ class Task:
         self.meta = meta or {}
         self.state = "running"
         self.pct = 0.0
+        self.got = 0          # bytes so far and expected, for downloads
+        self.total = 0
+        self.busy = False     # working with no number to show (pip unpacking)
         self.detail = ""
         self.lines: list[str] = []
         self.created = time.time()
@@ -49,6 +52,7 @@ class Task:
         with self._lock:
             return {"id": self.id, "kind": self.kind, "title": self.title,
                     "meta": self.meta, "state": self.state,
+                    "got": self.got, "total": self.total, "busy": self.busy,
                     "pct": round(self.pct or 0, 1), "detail": self.detail,
                     "created": self.created, "cursor": len(self.lines),
                     "lines": self.lines[since:]}
@@ -75,6 +79,14 @@ class Tasks:
         with self._lock:
             return sorted(self._items.values(), key=lambda t: t.created,
                           reverse=True)
+
+    def visible(self, finished: int = 25) -> list[Task]:
+        """What the page lists: every running task, then the newest finished
+        ones. A plain newest-25 cap hid the oldest running downloads — which
+        are the big ones, since the set queues them first."""
+        tasks = self.list()
+        return [t for t in tasks if t.state == "running"] + \
+            [t for t in tasks if t.state != "running"][:finished]
 
     def running(self, kind: str = "") -> list[Task]:
         return [t for t in self.list()
@@ -225,7 +237,12 @@ def install_dependency(dep_id: str, cfg: dict) -> Task:
 
     def run(task: Task) -> None:
         def pct(p, d):
-            task.set(pct=p or task.pct, detail=d)
+            # None means pip is unpacking or building: keep the bar where it
+            # is and mark it busy, rather than snapping it back to zero
+            if p is None:
+                task.set(busy=True, detail=d)
+            else:
+                task.set(pct=p, busy=False, detail=d)
 
         try:
             if dep_id == "venv":
@@ -268,7 +285,8 @@ def download_item(cfg: dict, item: dict) -> Task:
         task.log(f"{item['repo']}/{item['path']} → {dest}")
 
         def on_prog(got, total, speed, eta):
-            task.set(pct=(got / total * 100) if total else 0,
+            task.set(pct=(got / total * 100) if total else 0, got=got,
+                     total=total, busy=not total,
                      detail=bootstrap.fmt_transfer(got, total, speed, eta))
 
         bootstrap.download_file(cfg, item["repo"], item["path"], dest, on_prog,
@@ -278,10 +296,13 @@ def download_item(cfg: dict, item: dict) -> Task:
                      detail="Cancelled — the part that downloaded is kept, and "
                             "starting again carries on from there.")
             return
-        task.set(pct=100, detail=f"Saved — {bootstrap.fmt_size(dest.stat().st_size)}")
+        size = dest.stat().st_size
+        task.set(pct=100, got=size, total=size, busy=False,
+                 detail=f"Saved — {bootstrap.fmt_size(size)}")
 
     return spawn("download", item["name"], run,
-                 {"repo": item["repo"], "path": item["path"], "dest": str(dest)})
+                 {"repo": item["repo"], "path": item["path"], "dest": str(dest),
+                  "size": item.get("size") or 0})
 
 
 def download_set(cfg: dict) -> list[Task]:

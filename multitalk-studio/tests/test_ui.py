@@ -8,8 +8,22 @@ import os
 import shutil
 from pathlib import Path
 
+import requests
+
 from harness import (SAMPLE_PNG, SAMPLE_WAV, Suite, Workspace, fake_weights,
-                     studio)
+                     hub, studio)
+
+# what a person sees on one Models-page row: the badge, the line under it,
+# and the bar's width — read in the page so the test sees what they see
+ROW = """(name) => {
+  const row = [...document.querySelectorAll('#setsList .frow')]
+    .find(r => r.dataset.path.endsWith(name));
+  if (!row) return null;
+  const bar = row.querySelector('.bar4');
+  return {badge: row.querySelector('.state').textContent,
+          line: row.querySelector('.dl').hidden ? '' : row.querySelector('.dl').textContent,
+          bar: bar.hidden ? null : parseFloat(bar.querySelector('i').style.width)};
+}"""
 
 
 def available() -> str:
@@ -129,5 +143,56 @@ def run(slow: bool = False) -> Suite:
             s.check("the draft survives a reload",
                     page.locator("#ttsText").input_value() == "hello there")
             s.check("no script errors along the way", not errors, str(errors[:3]))
+            browser.close()
+
+    # -- downloading the weights: every running file shows its progress ------
+    with Workspace() as ws, hub() as hf:
+        requests.post(hf.url + "/mock/mode", json={"slow": 0.1}, timeout=10)
+        with studio(ws / "data", ws / "weights", hf_endpoint=hf.url) as app, \
+                sync_playwright() as p:
+            exe = chromium()
+            browser = p.chromium.launch(**({"executable_path": exe} if exe else {}))
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(app.url)
+            page.click('.nav[data-view="models"]')
+            page.wait_for_selector("#setsList .frow")
+            page.locator("#setsList .setrow.on button", has_text="Download").click()
+            big = "quant_model_int8_FusionX.safetensors"
+            moving = page.wait_for_function(
+                f"(() => {{ const r = ({ROW})('{big}'); "
+                "return r && r.bar > 0 && r.bar < 100 ? r : null; })()",
+                timeout=30000).json_value()
+            s.check("the biggest file's own row shows a moving bar",
+                    0 < moving["bar"] < 100, str(moving))
+            s.check("and says how far it has got",
+                    " of " in moving["line"] and moving["badge"].endswith("%"),
+                    str(moving))
+            head = page.locator("#setsList .setrow.on .setprog")
+            s.check("the set shows one overall bar while it downloads",
+                    head.is_visible() and "Downloading" in head.text_content(),
+                    head.text_content())
+            box = page.evaluate(
+                f"""(() => {{ const r = [...document.querySelectorAll('#setsList .frow')]
+                    .find(r => r.dataset.path.endsWith('{big}'));
+                  const b = r.querySelector('.bar4').getBoundingClientRect();
+                  const t = r.querySelector('.top').getBoundingClientRect();
+                  return {{w: b.width, below: b.top >= t.bottom}}; }})()""")
+            s.check("the row's bar is drawn full width, under its name",
+                    box["w"] > 300 and box["below"], str(box))
+            first = page.locator("#dlList .fitem .n b").first.text_content()
+            s.equal("the Downloads panel lists the running big file first",
+                    first, big)
+            if os.environ.get("MT_SCREENSHOTS"):
+                page.screenshot(path=os.environ["MT_SCREENSHOTS"]
+                                + "/models-downloading.png")
+            page.wait_for_function(
+                f"(() => {{ const r = ({ROW})('{big}'); "
+                "return r && r.badge === 'have it'; })()", timeout=60000)
+            s.check("when it finishes the row says so and the bar goes",
+                    page.evaluate(f"({ROW})('{big}')")["bar"] is None)
+            page.wait_for_function(
+                "document.querySelector('#setsList .setrow.on .setprog').hidden",
+                timeout=60000)
+            s.check("and the overall bar goes when the set is done", True)
             browser.close()
     return s

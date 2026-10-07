@@ -146,6 +146,15 @@
   .bar4 i{display:block;height:100%;border-radius:2px;transition:width .4s ease;
         background:linear-gradient(90deg,var(--accent),var(--accent-2))}
   .bar4.indet i{width:34%;animation:slide 1.3s ease-in-out infinite}
+  .taskbar{height:5px;margin:-6px 0 12px}
+  .fitem.frow{display:block}
+  .frow .top{display:flex;align-items:center;gap:12px}
+  .frow .dl{font-size:11.5px;color:#cdbcff;margin-top:6px;
+        font-variant-numeric:tabular-nums}
+  .frow .bar4{height:4px}
+  .setprog{flex-basis:100%;font-size:12px;color:#cdbcff;
+        font-variant-numeric:tabular-nums}
+  .setprog .bar4{height:5px;margin-top:6px}
   @keyframes slide{0%{margin-left:-34%}100%{margin-left:100%}}
   .skel.bad{border-color:rgba(255,90,90,.4)}
   .skel.bad .lbl{color:#ff9a9a}
@@ -443,6 +452,7 @@
       <div class="panel">
         <h2>Activity</h2>
         <p class="sub" id="taskTitle">Nothing running.</p>
+        <div class="bar4 taskbar" id="taskBar" hidden><i></i></div>
         <div class="log" id="taskLog"></div>
         <div class="rowbtn"><button class="btn" id="btnCancelTask" hidden>Stop</button></div>
       </div>
@@ -1186,9 +1196,19 @@ async function pollTasks() {
   var list = [];
   try { list = await api("/api/tasks"); } catch (e) { return; }
   var dls = list.filter(function (t) { return t.kind === "download"; });
+  S.lastDls = dls;
+  paintModelRows(dls);
+  // every running download, oldest (the big ones) first, then the most
+  // recent finished ones — a cap must never hide what is still running
+  var live = dls.filter(function (t) { return t.state === "running"; })
+    .sort(function (a, b) { return a.created - b.created; });
+  var rest = dls.filter(function (t) { return t.state !== "running"; })
+    .sort(function (a, b) {
+      return (a.state === "error" ? 0 : 1) - (b.state === "error" ? 0 : 1)
+        || b.created - a.created; }).slice(0, 6);
   var box = $("dlList");
   box.innerHTML = dls.length ? "" : '<div class="empty">No downloads running.</div>';
-  dls.slice(0, 12).forEach(function (t) {
+  live.concat(rest).forEach(function (t) {
     var el = document.createElement("div");
     el.className = "fitem"; el.style.display = "block";
     el.innerHTML = '<div style="display:flex;gap:10px;align-items:center">' +
@@ -1196,7 +1216,8 @@ async function pollTasks() {
       '</span></div><div class="right"><span class="state ' +
       (t.state === "done" ? "ok" : t.state === "error" ? "missing" : "") + '">' +
       esc(t.state) + "</span></div></div>" +
-      '<div class="bar4"><i style="width:' + Math.round(t.pct) + '%"></i></div>';
+      '<div class="bar4' + (t.state === "running" && !t.got ? " indet" : "") +
+      '"><i style="width:' + Math.round(t.pct) + '%"></i></div>';
     if (t.state === "running") {
       var b = mkBtn("Stop", function () {
         api("/api/tasks/" + t.id + "/cancel", { method: "POST" }).then(pollTasks); });
@@ -1215,6 +1236,10 @@ async function pollTasks() {
       var t = await api("/api/tasks?id=" + S.taskId + "&since=" + S.taskCursor);
       S.taskCursor = t.cursor;
       $("taskTitle").textContent = t.title + " — " + (t.detail || t.state);
+      var tb = $("taskBar");
+      tb.hidden = t.state !== "running";
+      tb.classList.toggle("indet", !!t.busy || !t.pct);
+      tb.querySelector("i").style.width = Math.round(t.pct || 0) + "%";
       if (t.lines.length) {
         var log = $("taskLog");
         log.textContent += t.lines.join("\n") + "\n";
@@ -1252,7 +1277,7 @@ async function loadHf() {
     var have = set.files.filter(function (f) { return f.installed; }).length;
     el.innerHTML = '<div class="n"><b>' + esc(set.label) + "</b><span>" +
       esc(set.note) + '</span></div><div class="right"><span class="state">≈ ' +
-      (set.download / 1e9).toFixed(0) + ' GB</span><span class="state ' +
+      (set.download / 1e9).toFixed(0) + ' GB</span><span class="state cnt ' +
       (set.complete ? "ok" : "") + '">' + (set.complete ? "installed"
         : have + " of " + set.files.length) + "</span></div>";
     var right = el.querySelector(".right");
@@ -1262,20 +1287,113 @@ async function loadHf() {
       right.appendChild(b);
     }
     if (!mine) right.appendChild(mkBtn("Use this", function () { usePrecision(key); }));
+    if (mine) {
+      // the whole set at a glance, filled in by paintModelRows()
+      var sp = document.createElement("div");
+      sp.className = "setprog"; sp.hidden = true;
+      sp.innerHTML = '<span class="t"></span><div class="bar4"><i></i></div>';
+      el.appendChild(sp);
+    }
     box.appendChild(el);
     if (!mine) return;
     set.files.forEach(function (f) {
       var fe = document.createElement("div");
-      fe.className = "fitem"; fe.style.margin = "0 0 6px 14px";
-      fe.innerHTML = '<div class="n"><b>' + esc(f.group) + " · " + esc(f.name) +
-        "</b><span>" + esc(f.why) + " " + (f.approx ? "≈ " : "") + fmtSize(f.size) +
-        (f.role === "optional" ? " · optional" : "") +
+      fe.className = "fitem frow"; fe.style.margin = "0 0 6px 14px";
+      fe.dataset.repo = f.repo; fe.dataset.path = f.path;
+      fe.dataset.prefix = f.prefix ? "1" : "";
+      fe.dataset.size = f.size || 0;
+      fe.dataset.installed = f.installed ? "1" : "";
+      fe.dataset.optional = f.role === "optional" ? "1" : "";
+      fe.innerHTML = '<div class="top"><div class="n"><b>' + esc(f.group) + " · " +
+        esc(f.name) + "</b><span>" + esc(f.why) + " " + (f.approx ? "≈ " : "") +
+        fmtSize(f.size) + (f.role === "optional" ? " · optional" : "") +
         '</span></div><div class="right"><span class="state ' +
         (f.installed ? "ok" : f.role === "optional" ? "warn" : "missing") + '">' +
-        (f.installed ? "have it" : "missing") + "</span></div>";
+        (f.installed ? "have it" : "missing") + "</span></div></div>" +
+        '<div class="dl" hidden></div><div class="bar4" hidden><i></i></div>';
       box.appendChild(fe);
     });
   });
+  paintModelRows(S.lastDls || []);
+}
+// Live download state on the Models page rows. A file row matches the
+// download of that repo/path; a folder row (tokenizers, voices) matches every
+// download under its folder and shows them as one.
+function rowTasks(row, dls) {
+  var repo = row.dataset.repo, path = row.dataset.path, folder = !!row.dataset.prefix;
+  return dls.filter(function (t) {
+    var m = t.meta || {};
+    return m.repo === repo && (folder ? String(m.path || "").indexOf(path) === 0
+                                      : m.path === path);
+  });
+}
+function paintModelRows(dls) {
+  var rows = document.querySelectorAll("#setsList .frow");
+  if (!rows.length) return;
+  var setDone = 0, setTotal = 0, active = 0;
+  rows.forEach(function (row) {
+    var ts = rowTasks(row, dls);
+    var running = ts.filter(function (t) { return t.state === "running"; });
+    var failed = ts.filter(function (t) { return t.state === "error"; });
+    var size = Number(row.dataset.size) || 0;
+    var had = row.dataset.installed === "1";
+    var finished = ts.length && ts.every(function (t) { return t.state === "done"; });
+    var badge = row.querySelector(".state"), dl = row.querySelector(".dl"),
+        bar = row.querySelector(".bar4"), fill = bar.querySelector("i");
+    var got = 0, total = 0;
+    ts.forEach(function (t) {
+      var tt = t.total || (t.meta && t.meta.size) || 0;
+      total += tt;
+      got += t.state === "done" ? tt : (t.got || 0);
+    });
+    if (!total) total = size;
+    if (running.length) {
+      active += running.length;
+      var pct = total ? Math.min(100, got / total * 100) : 0;
+      badge.className = "state warn";
+      badge.textContent = Math.floor(pct) + "%";
+      dl.hidden = false;
+      dl.textContent = running.length === 1 && ts.length === 1
+        ? running[0].detail || "Starting…"
+        : (ts.length - running.length) + " of " + ts.length + " files · " +
+          fmtSize(got) + " of " + fmtSize(total);
+      bar.hidden = false;
+      bar.classList.toggle("indet", !got);
+      fill.style.width = pct.toFixed(1) + "%";
+      setDone += got; setTotal += total;
+    } else if (failed.length && !finished) {
+      badge.className = "state missing";
+      badge.textContent = "failed";
+      dl.hidden = false; bar.hidden = true;
+      dl.textContent = (failed[0].detail || "Download failed") +
+        " — press Download to try again; it resumes.";
+      setDone += got; setTotal += total;
+    } else if (finished || had) {
+      badge.className = "state ok"; badge.textContent = "have it";
+      dl.hidden = true; bar.hidden = true;
+      setDone += total; setTotal += total;
+    } else {
+      setTotal += size;
+    }
+  });
+  var cnt = document.querySelector("#setsList .setrow.on .cnt");
+  if (cnt && cnt.textContent !== "installed") {
+    var haveNow = 0;
+    rows.forEach(function (r) {
+      if (r.querySelector(".state").textContent === "have it") haveNow++; });
+    cnt.textContent = haveNow + " of " + rows.length;
+  }
+  var sp = document.querySelector("#setsList .setrow.on .setprog");
+  if (sp) {
+    sp.hidden = !active;
+    if (active) {
+      var pct = setTotal ? Math.min(100, setDone / setTotal * 100) : 0;
+      sp.querySelector(".t").textContent = "Downloading " + active + " file" +
+        (active > 1 ? "s" : "") + " · " + fmtSize(setDone) + " of ≈ " +
+        fmtSize(setTotal) + " · " + pct.toFixed(1) + "%";
+      sp.querySelector("i").style.width = pct.toFixed(1) + "%";
+    }
+  }
 }
 async function usePrecision(key) {
   try {

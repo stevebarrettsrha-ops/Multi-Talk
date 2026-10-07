@@ -33,6 +33,18 @@
 8. **Localhost only.** `local_only()` refuses foreign Host headers and
    cross-origin writes — the app runs pip and processes.
 
+## Every running download is visible
+
+A person downloading 29 GB must always see it move. Each Models-page file
+row shows its own bar while it downloads (`paintModelRows`, matched to tasks
+by repo and path, folder rows summed), the set shows one overall bar, the
+Downloads panel lists every running task before any finished one, and
+`Tasks.visible()` never drops a running task from `/api/tasks`. The Engine
+page's Activity panel has a bar too. pip's raw progress is detected by
+letting pip parse `--progress-bar raw` (24.1+), and every line it prints is
+passed on. `test_ui` fails if the biggest file downloads without a moving
+bar.
+
 ## The weight set
 
 `bootstrap.model_set()` is the single list. INT8 only: the files the engine
