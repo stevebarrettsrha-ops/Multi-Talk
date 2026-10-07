@@ -429,6 +429,21 @@
         </div>
       </div>
       <div class="panel">
+        <h2>Does it actually work?</h2>
+        <p class="sub">Every row above can read ok while the first render
+          still fails. This renders one 3-second clip of MultiTalk's own
+          two-voice example on this machine and checks what comes back:
+          frames that are not blank and move, and both voices, each in its
+          turn. It stops at the first step that breaks and names it. On an
+          RTX 4060 expect a few minutes, most of it loading the model.</p>
+        <div class="flist" id="testList"></div>
+        <p class="note" id="testNote"></p>
+        <div class="rowbtn">
+          <button class="btn go" id="btnSelfTest">Test the engine</button>
+          <button class="btn" id="btnTestClip" hidden>Watch the test clip</button>
+        </div>
+      </div>
+      <div class="panel">
         <h2>Preflight</h2>
         <p class="sub">What this machine can do with the weights you chose.
           Measured, not guessed.</p>
@@ -463,7 +478,12 @@
 <!-- generation settings -->
 <div class="pop" id="settingsPop" hidden>
   <h3>Generation</h3>
-  <div class="orow"><span class="lab">Size</span><div class="ctl">
+  <div class="orow"><span class="lab">Video</span><div class="ctl">
+    <div class="chips" id="segOutput">
+      <button class="on" data-v="720x360">720 × 360</button>
+      <button data-v="720x1280">720 × 1280</button>
+    </div></div></div>
+  <div class="orow"><span class="lab">Render at</span><div class="ctl">
     <div class="chips" id="segSize">
       <button data-v="multitalk-240">320</button>
       <button class="on" data-v="multitalk-360">480</button>
@@ -585,7 +605,7 @@
 /* ========================= state ========================= */
 var S = {
   view: "create", people: 1, source: "files", mode: "streaming",
-  size: "multitalk-360", image: null, audio1: null, audio2: null,
+  size: "multitalk-360", output: "720x360", image: null, audio1: null, audio2: null,
   status: null, jobs: [], clips: [], libFilter: "", lightbox: null,
   setupCursor: 0, taskId: null, taskCursor: 0, setupSeen: false,
   openLogs: {}, defaultsFor: null
@@ -648,7 +668,7 @@ function setSeg(id, v) {
 function saveDraft() {
   store("mt.draft", { prompt: $("prompt").value, tts: $("ttsText").value,
     people: S.people, source: S.source, mode: S.mode, size: S.size,
-    image: S.image, audio1: S.audio1, audio2: S.audio2,
+    output: S.output, image: S.image, audio1: S.audio1, audio2: S.audio2,
     voice1: $("voice1").value, voice2: $("voice2").value,
     order: segOn("segOrder"), teacache: segOn("segTeacache"),
     tile: segOn("segTile"), t5: segOn("segT5"),
@@ -665,6 +685,7 @@ function loadDraft() {
   S.source = d.source === "tts" ? "tts" : "files";
   S.mode = d.mode === "clip" ? "clip" : "streaming";
   S.size = d.size || "multitalk-360";
+  S.output = d.output === "720x1280" ? "720x1280" : "720x360";
   S.image = d.image || null; S.audio1 = d.audio1 || null; S.audio2 = d.audio2 || null;
   S.pendingVoices = [d.voice1, d.voice2];
   S.defaultsFor = d.defaultsFor || null;
@@ -703,6 +724,7 @@ function applyDefaults(force) {
 function syncAll() {
   setSeg("segPeople", S.people); setSeg("segSource", S.source);
   setSeg("segMode", S.mode); setSeg("segSize", S.size);
+  setSeg("segOutput", S.output);
   $("ttsBox").hidden = S.source !== "tts";
   $("btnAudio1").hidden = S.source === "tts";
   $("btnAudio2").hidden = S.source === "tts" || S.people === 1;
@@ -756,13 +778,18 @@ function syncCost() {
   var size = sizes[S.size] || { label: "", note: "" };
   var steps = Number($("stepsSl").value);
   var calls = Number($("textSl").value) === 1 ? 2 : 3;
-  $("costNote").textContent = size.label + " square-ish (the picture's own " +
-    "aspect is kept). " + size.note + " " + steps + " steps × " + calls +
+  var out = (st.outputs || {})[S.output] || { w: 720, h: 360 };
+  $("costNote").textContent = "Rendered at about " + size.label + " in the " +
+    out.w + " × " + out.h + " shape, then resized to exactly " + out.w + " × " +
+    out.h + " (the picture is centre-cropped to that shape). " +
+    size.note + " " + steps + " steps × " + calls +
     " model passes per step, per 3.2 s clip. " +
     (S.mode === "streaming" ? "Whole audio: one clip per 2.2 s of speech after the first."
                             : "One 3.2 s clip.");
   var hint = "";
-  if (S.people === 2 && S.source === "files")
+  if (S.people === 2 && S.output === "720x1280")
+    hint = "Two people in a tall frame: the sides of a wide picture are cropped — keep both faces near the middle.";
+  else if (S.people === 2 && S.source === "files")
     hint = "Two people: voice 1 drives the person on the left of the picture, voice 2 the right.";
   else if (S.people === 2)
     hint = "Two people: mark who speaks with (s1) and (s2). (s1) is the left person.";
@@ -787,7 +814,7 @@ function collect() {
   var p = {
     prompt: $("prompt").value.trim(), people: S.people, source: S.source,
     image: S.image && S.image.name, mode: S.mode, size: S.size,
-    steps: Number($("stepsSl").value), text_scale: Number($("textSl").value),
+    output: S.output, steps: Number($("stepsSl").value), text_scale: Number($("textSl").value),
     audio_scale: Number($("audioSl").value), shift: Number($("shiftSl").value),
     teacache: segOn("segTeacache") === "on",
     vae_tile: Number(segOn("segTile") || 0),
@@ -929,7 +956,7 @@ function tile(c) {
     '<button data-act="del" title="Delete"><svg viewBox="0 0 24 24">' +
     '<path d="M6 6l12 12M18 6 6 18"/></svg></button></div>' +
     '<div class="over"><div class="cap">' + esc(c.title) + "</div>" +
-    '<div class="meta">' + esc(sizeLabel(c.size)) + " · " +
+    '<div class="meta">' + esc(c.width ? c.width + " × " + c.height : sizeLabel(c.size)) + " · " +
     (c.seconds ? c.seconds + " s" : "?") + " · " + c.people +
     (c.people === 2 ? " people" : " person") +
     (c.seed == null || c.seed < 0 ? "" : " · seed " + c.seed) + "</div></div>";
@@ -995,6 +1022,7 @@ function reuse(c) {
   S.source = c.source === "tts" ? "tts" : "files";
   S.mode = c.mode || "streaming";
   S.size = c.size || S.size;
+  S.output = c.output || S.output;
   S.image = c.image ? { name: c.image, label: "from " + (c.title || "clip") } : null;
   S.audio1 = c.audio1 ? { name: c.audio1, label: "voice 1" } : null;
   S.audio2 = c.audio2 ? { name: c.audio2, label: "voice 2" } : null;
@@ -1033,7 +1061,9 @@ function openLightbox(c) {
   $("lbTitle").textContent = c.title;
   $("lbPrompt").textContent = (c.prompt || "") +
     (c.tts_text ? "\n\n“" + c.tts_text + "”" : "");
-  var rows = [["Size", sizeLabel(c.size)],
+  var rows = [["Video", c.width ? c.width + " × " + c.height : "—"],
+              ["Rendered at", c.render_width ? c.render_width + " × " +
+                 c.render_height + " (" + sizeLabel(c.size) + ")" : sizeLabel(c.size)],
               ["Length", c.seconds ? c.seconds + " s" : "—"],
               ["People", c.people],
               ["Speech", c.source === "tts" ? "Typed · " + [c.voice1, c.voice2]
@@ -1064,7 +1094,7 @@ function show(view) {
   $("settingsPop").hidden = true;
   $("mainCol").scrollTop = 0;
   if (view === "models") { loadHf(); loadLocal(); pollTasks(); }
-  if (view === "engine") { loadDeps(); loadPreflight(); pollTasks(); }
+  if (view === "engine") { loadDeps(); loadPreflight(); pollTasks(); pollSelfTest(); }
   if (view === "library") renderLib();
   if (view === "create") requestAnimationFrame(function () {
     grow($("prompt")); renderFeed(); });
@@ -1257,6 +1287,58 @@ async function pollTasks() {
   if (list.some(function (t) { return t.state === "running"; })) {
     taskTimer = setTimeout(pollTasks, 1400);
   } else if (dls.length && S.view === "models") { loadHf(); loadLocal(); refreshStatus(); }
+}
+
+/* ========================= self-test ========================= */
+var testTimer = null;
+function paintSelfTest(d) {
+  var box = $("testList");
+  box.innerHTML = "";
+  var stage = "";
+  if (d.running && d.job) {
+    var j = S.jobs.filter(function (x) { return x.id === d.job; })[0];
+    if (j) stage = (j.stage || "") + (j.status === "running" ? " · " + Math.round(j.pct || 0) + "%" : "");
+  }
+  (d.steps || []).forEach(function (st) {
+    var el = document.createElement("div");
+    el.className = "fitem frow test-" + st.key;
+    var cls = st.state === "ok" ? "ok" : st.state === "fail" ? "missing"
+      : st.state === "running" ? "warn" : "";
+    var word = st.state === "fail" ? "failed" : st.state === "running" ? "working"
+      : st.state;
+    var detail = st.key === "render" && st.state === "running" && stage ? stage : st.detail;
+    el.innerHTML = '<div class="top"><div class="n"><b>' + esc(st.label) +
+      "</b><span>" + esc(detail || "") + '</span></div><div class="right">' +
+      '<span class="state ' + cls + '">' + esc(word) + "</span></div></div>" +
+      (st.state === "running" ? '<div class="bar4 indet"><i></i></div>' : "");
+    box.appendChild(el);
+  });
+  $("testNote").textContent = d.ok === true
+    ? "Passed. " + (d.estimate || "")
+    : d.ok === false ? "Stopped at the step marked failed — its line says what to fix."
+    : d.running ? "Running — the page can be left; it carries on." : "";
+  $("btnSelfTest").disabled = !!d.running;
+  $("btnSelfTest").textContent = d.running ? "Testing…" : "Test the engine";
+  $("btnTestClip").hidden = !d.clip;
+  $("btnTestClip").dataset.clip = d.clip || "";
+}
+async function pollSelfTest() {
+  clearTimeout(testTimer);
+  var d;
+  try { d = await api("/api/selftest"); } catch (e) { return; }
+  if (d.running) {
+    try { S.jobs = await api("/api/jobs"); } catch (e) { /* keep the last */ }
+  }
+  paintSelfTest(d);
+  if (d.running) testTimer = setTimeout(pollSelfTest, 2000);
+  else if (d.clip) loadClips();
+}
+async function startSelfTest() {
+  try {
+    await api("/api/selftest", { method: "POST" });
+    toast("Testing the engine — one short two-voice clip.");
+    pollSelfTest();
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ========================= models page ========================= */
@@ -1569,6 +1651,7 @@ function wire() {
    ["segSource", function (v) { S.source = v; }],
    ["segMode", function (v) { S.mode = v; }],
    ["segSize", function (v) { S.size = v; }],
+   ["segOutput", function (v) { S.output = v; }],
    ["segOrder", null], ["segTeacache", null], ["segTile", null], ["segT5", null]
   ].forEach(function (row) {
     $(row[0]).querySelectorAll("button").forEach(function (b) {
@@ -1632,6 +1715,13 @@ function wire() {
   $("btnInstallAll").addEventListener("click", installAllMissing);
   $("btnReRun").addEventListener("click", openSetup);
   $("btnPreflight").addEventListener("click", loadPreflight);
+  $("btnSelfTest").addEventListener("click", startSelfTest);
+  $("btnTestClip").addEventListener("click", async function () {
+    var id = $("btnTestClip").dataset.clip;
+    await loadClips();
+    var c = S.clips.filter(function (x) { return x.id === id; })[0];
+    if (c) openLightbox(c); else toast("That clip has been deleted.", true);
+  });
   $("btnCancelTask").addEventListener("click", function () {
     if (S.taskId) api("/api/tasks/" + S.taskId + "/cancel", { method: "POST" }); });
   $("btnSaveTorch").addEventListener("click", async function () {

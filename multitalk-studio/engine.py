@@ -20,6 +20,18 @@ FRAME_NUM = 81           # one clip: 81 frames, 3.24 s
 MOTION_FRAME = 25        # frames carried into the next clip when streaming
 MAX_STREAM_FRAMES = 1000  # the engine's own cap in streaming mode (40 s)
 
+# What a finished clip measures. MultiTalk renders at a size bucket that
+# fits the card (multiples of 32; 360 is not one, and 720 x 1280 natively
+# wants ~33 GB of VRAM), so each output picks the bucket of its own shape
+# and the studio resizes the result to the exact pixels afterwards.
+OUTPUTS = {
+    "720x360": {"label": "720 × 360 — landscape", "w": 720, "h": 360,
+                "ratio": 360 / 720},
+    "720x1280": {"label": "720 × 1280 — portrait", "w": 720, "h": 1280,
+                 "ratio": 1280 / 720},
+}
+DEFAULT_OUTPUT = "720x360"
+
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 AUDIO_EXT = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac",
              ".mp4", ".mov", ".mkv", ".avi"}
@@ -140,6 +152,11 @@ def normalize(params: dict, cfg: dict) -> dict:
         raise BadRequest("Size must be one of " + ", ".join(
             v["label"] for v in bootstrap.SIZES.values()) + ".")
     out["size"] = size
+    output = params.get("output") or DEFAULT_OUTPUT
+    if output not in OUTPUTS:
+        raise BadRequest("The video is 720 × 360 (landscape) or 720 × 1280 "
+                         "(portrait).")
+    out["output"] = output
     mode = params.get("mode") or "streaming"
     if mode not in ("clip", "streaming"):
         raise BadRequest("Length is either one clip or the whole audio.")
@@ -165,6 +182,21 @@ def normalize(params: dict, cfg: dict) -> dict:
     out["persistent"] = _num(params, "persistent", 0, 0, 20_000_000_000, int)
     out["title"] = str(params.get("title") or "")[:120]
     return out
+
+
+def resize_args(ffmpeg: str, src: Path, dst: Path, w: int, h: int,
+                scale: float) -> list[str]:
+    """ffmpeg's command to bring a render to exactly w x h: scaled to cover
+    (lanczos), centre-cropped, a light sharpen where it was enlarged a lot,
+    the soundtrack copied as it is."""
+    vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,"
+          f"crop={w}:{h},setsar=1")
+    if scale > 1.4:
+        vf += ",unsharp=5:5:0.6:5:5:0.0"
+    return [ffmpeg, "-v", "error", "-y", "-i", str(src), "-vf", vf,
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+            "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
+            str(dst)]
 
 
 def as_path(p: Path) -> str:
@@ -215,6 +247,7 @@ def argv(cfg: dict, job: dict, json_path: Path, audio_dir: Path,
            "--audio_save_dir", as_path(audio_dir),
            "--save_file", as_path(save_file),
            "--size", job["size"],
+           "--bucket_ratio", f"{OUTPUTS[job.get('output') or DEFAULT_OUTPUT]['ratio']:.4f}",
            "--mode", job["mode"],
            "--frame_num", str(FRAME_NUM),
            "--motion_frame", str(MOTION_FRAME),
@@ -258,7 +291,7 @@ SEED = re.compile(r"base_seed=(-?\d+)")
 def new_state() -> dict:
     return {"stage": "Starting the engine", "pct": 1.0, "clips": 0, "clip": 0,
             "step": 0, "steps": 0, "frames": 0, "oom": False, "saving": False,
-            "tail": [], "seed": None}
+            "tail": [], "seed": None, "phase": ""}
 
 
 def read_line(state: dict, line: str) -> None:
@@ -285,7 +318,13 @@ def read_line(state: dict, line: str) -> None:
         state["clips"], state["frames"] = int(m.group(1)), int(m.group(2))
     m = CLIP.search(line)
     if m:
-        state["clip"], state["step"] = int(m.group(1)), 0
+        state["clip"], state["step"], state["phase"] = int(m.group(1)), 0, ""
+        state["stage"] = _clip_stage(state)
+    elif "[clip] encoding" in line or "[clip] decoding" in line:
+        # the VAE stretches either side of sampling: minutes on a CPU,
+        # tens of seconds on a 4060 — named, so the bar is not "stuck"
+        state["phase"] = ("reading the picture" if "encoding" in line
+                          else "decoding the frames")
         state["stage"] = _clip_stage(state)
     if "Saving video" in line or "Saving generated video" in line:
         state["saving"] = True
@@ -295,6 +334,7 @@ def read_line(state: dict, line: str) -> None:
     if m and not state["saving"] and state["clip"]:
         step, steps = int(m.group(1)), int(m.group(2))
         state["step"], state["steps"] = step, steps
+        state["phase"] = ""
         state["stage"] = _clip_stage(state)
         state["pct"] = max(state["pct"], sampling_pct(state))
     if line.strip().endswith("Finished."):
@@ -305,6 +345,8 @@ def _clip_stage(state: dict) -> str:
     clips = state["clips"] or 1
     head = (f"Clip {state['clip']} of {clips}" if clips > 1
             else "Rendering")
+    if state.get("phase"):
+        return f"{head} · {state['phase']}"
     if state["steps"] and state["step"]:
         return f"{head} · step {state['step']} of {state['steps']}"
     return head
@@ -325,6 +367,15 @@ def failure(state: dict, code: int) -> str:
                 "and the text encoder on the CPU, and close anything else "
                 "using the GPU.")
     text = "\n".join(state["tail"])
+    if "Torch not compiled with CUDA enabled" in text:
+        return ("PyTorch in the engine environment is the CPU build. On the "
+                "Engine page press Reinstall next to PyTorch to get the CUDA "
+                "build.")
+    if ("Found no NVIDIA driver" in text or "no CUDA GPUs are available" in text
+            or "CUDA driver version is insufficient" in text):
+        return ("PyTorch cannot reach the graphics card: the NVIDIA driver is "
+                "missing or too old for CUDA 12.1. Install the current driver "
+                "from nvidia.com, restart, then try again.")
     if "No such file or directory" in text or "FileNotFoundError" in text:
         hit = next((ln for ln in reversed(state["tail"])
                     if "No such file" in ln or "FileNotFoundError" in ln), "")

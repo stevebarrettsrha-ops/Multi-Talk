@@ -18,6 +18,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -30,6 +31,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 import bootstrap
 import engine
 import manager
+import selftest
 from bootstrap import APP_DIR, Progress, load_config, save_config
 
 DATA_DIR = bootstrap.DATA_DIR
@@ -139,13 +141,17 @@ def run_job(job: dict) -> None:
     state = engine.new_state()
     log_path = jdir / "engine.log"
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8",
+           # Windows hands a piped child the ANSI code page; UTF-8 both ends
+           "PYTHONUTF8": "1",
            # the multi-GPU path is never taken; keep tokenizers quiet
            "TOKENIZERS_PARALLELISM": "false"}
     if platform.system() != "Windows":
         # fragments from the per-layer offload otherwise pile up on 8 GB
         env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-    with open(log_path, "w", encoding="utf-8") as log:
+    # line-buffered: a render the app never sees finish (closed, crashed)
+    # still leaves its log behind for the person reading why
+    with open(log_path, "w", encoding="utf-8", buffering=1) as log:
         log.write("$ " + " ".join(cmd) + "\n")
 
         def on_line(line: str) -> None:
@@ -174,11 +180,44 @@ def run_job(job: dict) -> None:
             job.update(status="cancelled", stage="Stopped", finished=time.time())
         return
     if code != 0 or not out.exists():
+        error = engine.failure(state, code)
+        if state["oom"]:
+            others = [p for p in bootstrap.gpu_processes() if p["mb"] >= 100]
+            if others:
+                error += " Also on the card right now: " + ", ".join(
+                    f"{p['name']} ({p['mb'] / 1024:.1f} GB)" for p in others[:4]) \
+                    + "."
         with jobs_lock:
             job.update(status="error", stage="Failed", finished=time.time(),
-                       error=engine.failure(state, code))
+                       error=error)
         return
     shutil.rmtree(audio_dir, ignore_errors=True)
+    # to the exact output size: the render is the bucket that fits the card
+    want = engine.OUTPUTS[settings.get("output") or engine.DEFAULT_OUTPUT]
+    ffmpeg = selftest.find_ffmpeg(bootstrap.engine_python(cfg))
+    render_w, render_h = selftest.video_size(ffmpeg, out) if ffmpeg else (0, 0)
+    with jobs_lock:
+        job.update(stage=f"Resizing to {want['w']} × {want['h']}",
+                   pct=max(job.get("pct") or 0, 97))
+    if not ffmpeg or not render_w:
+        with jobs_lock:
+            job.update(status="error", stage="Failed", finished=time.time(),
+                       error="No ffmpeg could read the render to resize it — "
+                             "install the engine packages on the Engine page.")
+        return
+    scale = max(want["w"] / render_w, want["h"] / render_h)
+    sized = out.with_name(out.stem + ".sized.mp4")
+    done = subprocess.run(engine.resize_args(ffmpeg, out, sized, want["w"],
+                                             want["h"], scale),
+                          capture_output=True, text=True)
+    if done.returncode != 0 or not sized.exists():
+        sized.unlink(missing_ok=True)
+        with jobs_lock:
+            job.update(status="error", stage="Failed", finished=time.time(),
+                       error="Resizing the render failed: "
+                             + (done.stderr.strip().splitlines() or ["?"])[-1][:200])
+        return
+    os.replace(sized, out)
     frames = state["frames"] if settings["mode"] == "streaming" else engine.FRAME_NUM
     item = {
         "id": job["id"], "file": out.name, "title": title_from(settings),
@@ -189,6 +228,9 @@ def run_job(job: dict) -> None:
         "tts_text": settings.get("tts_text", ""),
         "voice1": settings.get("voice1", ""), "voice2": settings.get("voice2", ""),
         "size": settings["size"], "mode": settings["mode"],
+        "output": settings.get("output") or engine.DEFAULT_OUTPUT,
+        "width": want["w"], "height": want["h"],
+        "render_width": render_w, "render_height": render_h,
         "steps": settings["steps"], "text_scale": settings["text_scale"],
         "audio_scale": settings["audio_scale"], "shift": settings["shift"],
         "teacache": settings["teacache"], "vae_tile": settings["vae_tile"],
@@ -273,6 +315,7 @@ def api_status():
                            "defaults": v["defaults"]}
                        for k, v in bootstrap.PRECISIONS.items()},
         "sizes": bootstrap.SIZES,
+        "outputs": engine.OUTPUTS,
         "config": {k: cfg.get(k) for k in
                    ("engine_dir", "weights_dir", "precision", "want_tts",
                     "want_xformers", "torch_index")},
@@ -619,6 +662,175 @@ def api_clip_delete(clip_id: str):
 
 
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# self-test: one real two-voice clip, checked
+# --------------------------------------------------------------------------- #
+SELFTEST_PATH = DATA_DIR / "selftest.json"
+selftest_lock = threading.Lock()
+selftest_run: selftest.Run | None = None
+# The suite's stand-in engine has no GPU and placeholder weights; with this
+# set, those two checks say "skipped (stand-in)" instead of failing. Never
+# set it on a real install — the checks exist for the real card and files.
+STANDIN = os.environ.get("MULTITALK_STUDIO_SELFTEST_STANDIN") == "1"
+
+
+def example_dir() -> Path:
+    """MultiTalk's own two-voice example, from the engine folder — or the
+    repository's copy when the engine in use carries no examples."""
+    for root in (bootstrap.engine_dir(cfg),
+                 Path(bootstrap.DEFAULT_CONFIG["engine_dir"])):
+        d = root.joinpath(*selftest.EXAMPLE)
+        if all((d / f).is_file() for f in selftest.EXAMPLE_FILES.values()):
+            return d
+    raise FileNotFoundError("MultiTalk's examples/multi/1 is missing.")
+
+
+def run_selftest(run: selftest.Run) -> None:
+    try:
+        _run_selftest(run)
+    except Exception as exc:  # noqa: BLE001
+        step = next((s["key"] for s in run.steps if s["state"] == "running"),
+                    "engine")
+        run.fail(step, f"{type(exc).__name__}: {exc}")
+    finally:
+        run.running = False
+        try:
+            bootstrap.atomic_write(SELFTEST_PATH, json.dumps(
+                {**run.view(), "when": time.time()}, indent=2))
+        except OSError:
+            pass
+
+
+def _run_selftest(run: selftest.Run) -> None:
+    py, eng = bootstrap.engine_python(cfg), bootstrap.engine_dir(cfg)
+    run.set("engine", "running", "Importing the engine…")
+    if not py:
+        return run.fail("engine", "The engine environment is not installed — "
+                                  "run setup.")
+    loads, why = bootstrap.check_engine_loads(py, eng)
+    if not loads:
+        return run.fail("engine", "The engine's code would not load: " + why)
+    run.set("engine", "ok", "generate_multitalk.py imports and parses")
+
+    run.set("gpu", "running", "Asking PyTorch…")
+    vram, gpu = bootstrap.gpu_info(py, fresh=True)
+    if vram:
+        run.set("gpu", "ok", f"{gpu} · {vram / bootstrap.GIB:.0f} GB")
+    elif STANDIN:
+        run.set("gpu", "skipped", "Skipped — stand-in engine, no GPU here")
+    else:
+        return run.fail("gpu", "PyTorch cannot see an NVIDIA card. Update the "
+                               "NVIDIA driver, then on this page press "
+                               "Reinstall next to PyTorch.")
+
+    run.set("weights", "running", "Measuring the files…")
+    whole, detail = selftest.weights_whole(bootstrap.weights_dir(cfg), cfg)
+    if not whole and not STANDIN:
+        return run.fail("weights", detail)
+    run.set("weights", "ok" if whole else "skipped",
+            detail if whole else "Skipped — stand-in weights")
+
+    run.set("render", "running", "Queued…")
+    ex = example_dir()
+    names = {}
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    for key, fname in selftest.EXAMPLE_FILES.items():
+        name = uuid.uuid4().hex[:12] + Path(fname).suffix.lower()
+        shutil.copyfile(ex / fname, UPLOADS_DIR / name)
+        names[key] = name
+    defaults = bootstrap.PRECISIONS.get(cfg.get("precision") or "",
+                                        bootstrap.PRECISIONS["int8-fusionx"])
+    settings = engine.normalize({
+        **names, "people": 2, "source": "files", "audio_type": "add",
+        "mode": "clip", "size": "multitalk-240", "seed": 42,
+        "output": engine.DEFAULT_OUTPUT,
+        "steps": min(defaults["defaults"]["steps"], 8),
+        "prompt": "A man and a woman sit at a table and talk to each other, "
+                  "taking turns.",
+        "title": "Engine self-test"}, cfg)
+    blocker = engine_blocker()
+    if blocker:
+        return run.fail("render", blocker)
+    job_id = uuid.uuid4().hex[:12]
+    with jobs_lock:
+        jobs[job_id] = {"id": job_id, "status": "queued", "pct": 0,
+                        "stage": "Waiting for the GPU", "created": time.time(),
+                        "title": "Engine self-test", "settings": settings,
+                        "log": [], "proc": None}
+    run.job_id = job_id
+    wake.set()
+    while True:
+        with jobs_lock:
+            job = dict(jobs.get(job_id) or {})
+        if job.get("status") in ("done", "error", "cancelled"):
+            break
+        run.set("render", "running", job.get("stage") or "Working…")
+        time.sleep(1)
+    if job["status"] != "done":
+        return run.fail("render", job.get("error") or "The test render was "
+                                                      "stopped.")
+    run.took = round(job["finished"] - job["started"], 1)
+    run.clip = job["clip"]["id"]
+    run.set("render", "ok", f"{run.took:.0f} s for 3.2 s of video at 320 px, "
+                            f"{settings['steps']} steps")
+
+    run.set("frames", "running", "Looking at the frames…")
+    ffmpeg = selftest.find_ffmpeg(py)
+    if not ffmpeg:
+        return run.fail("frames", "No ffmpeg to read the video with — install "
+                                  "the engine packages on this page.")
+    video = CLIPS_DIR / job["clip"]["file"]
+    want = engine.OUTPUTS[engine.DEFAULT_OUTPUT]
+    got = selftest.video_size(ffmpeg, video)
+    if got != (want["w"], want["h"]):
+        return run.fail("frames", f"The video is {got[0]} × {got[1]}, not "
+                                  f"{want['w']} × {want['h']}.")
+    ok, detail = selftest.judge_frames(
+        selftest.frame_stats(selftest.read_frames(ffmpeg, video)),
+        engine.FRAME_NUM)
+    if not ok:
+        return run.fail("frames", detail)
+    run.set("frames", "ok", f"{got[0]} × {got[1]} · " + detail)
+
+    run.set("voices", "running", "Listening…")
+    rate = 8000
+    turns = [selftest.wav_seconds(ex / selftest.EXAMPLE_FILES["audio1"]),
+             selftest.wav_seconds(ex / selftest.EXAMPLE_FILES["audio2"])]
+    ok, detail = selftest.judge_voices(
+        selftest.read_audio(ffmpeg, video, rate), rate, turns,
+        engine.FRAME_NUM / engine.FPS)
+    if not ok:
+        return run.fail("voices", detail)
+    run.set("voices", "ok", detail)
+    run.estimate = selftest.estimate(run.took, engine.clips_for(250))
+    run.ok = True
+
+
+@app.post("/api/selftest")
+def api_selftest_start():
+    global selftest_run
+    with selftest_lock:
+        if selftest_run and selftest_run.running:
+            return jsonify({"error": "The self-test is already running."}), 409
+        selftest_run = selftest.Run()
+        threading.Thread(target=run_selftest, args=(selftest_run,),
+                         daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/selftest")
+def api_selftest_state():
+    if selftest_run:
+        return jsonify(selftest_run.view())
+    last = None
+    if SELFTEST_PATH.exists():
+        try:
+            last = json.loads(SELFTEST_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            last = None
+    return jsonify(last or selftest.Run().view() | {"running": False})
+
+
 def _warm_gpu() -> None:
     """Read the GPU once in the background so the page can offer settings
     that fit the card without waiting on a torch import."""

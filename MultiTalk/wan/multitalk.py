@@ -407,6 +407,12 @@ class MultiTalkPipeline:
 
         src_h, src_w = cond_image.height, cond_image.width
         ratio = src_h / src_w
+        # a requested output shape (MultiTalk Studio's 720x360 / 720x1280)
+        # picks the bucket instead of the picture; the picture is then
+        # centre-cropped to it below, exactly as for any other bucket
+        wanted = getattr(extra_args, 'bucket_ratio', None) if extra_args is not None else None
+        if wanted:
+            ratio = float(wanted)
         closest_bucket = sorted(list(bucket_config.keys()), key=lambda x: abs(float(x)-ratio))[0]
         target_h, target_w = bucket_config[closest_bucket][0]
         cond_image = resize_and_centercrop(cond_image, (target_h, target_w))
@@ -464,10 +470,12 @@ class MultiTalkPipeline:
             if offload_model:
                 self.text_encoder.model.cpu()
         else:
-            context = self.text_encoder([input_prompt], torch.device('cpu'))
-            context_null = self.text_encoder([n_prompt], torch.device('cpu'))
-            context = [t.to(self.device) for t in context]
-            context_null = [t.to(self.device) for t in context_null]
+            # The encoder returns one tensor per prompt. Upstream kept these
+            # as lists, so with t5_cpu the model received [[tensor]] and died
+            # on its first step ("'list' object has no attribute 'dtype'");
+            # the GPU branch above unpacks to tensors (MultiTalk Studio).
+            context = self.text_encoder([input_prompt], torch.device('cpu'))[0].to(self.device)
+            context_null = self.text_encoder([n_prompt], torch.device('cpu'))[0].to(self.device)
 
         torch_gc()
         # prepare params for video generation
@@ -546,6 +554,7 @@ class MultiTalkPipeline:
                 # zero padding and vae encode
                 video_frames = torch.zeros(1, cond_image.shape[1], frame_num-cond_image.shape[2], target_h, target_w).to(self.device)
                 padding_frames_pixels_values = torch.concat([cond_image, video_frames], dim=2)
+                logging.info("[clip] encoding the reference frames")
                 y = self.vae.encode(padding_frames_pixels_values) 
                 y = torch.stack(y).to(self.param_dtype) # B C T H W
                 cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num-1) // 4)
@@ -749,6 +758,7 @@ class MultiTalkPipeline:
                         self.model.cpu()
                 torch_gc()
 
+                logging.info("[clip] decoding the frames")
                 videos = self.vae.decode(x0) 
             
             # cache generated samples

@@ -33,6 +33,16 @@
 8. **Localhost only.** `local_only()` refuses foreign Host headers and
    cross-origin writes — the app runs pip and processes.
 
+## Two output sizes, exact
+
+A finished clip is exactly 720 × 360 or 720 × 1280 (`engine.OUTPUTS`;
+default 720 × 360), and nothing else is accepted. The engine renders the
+bucket of that shape (`--bucket_ratio`, height / width) at the chosen
+"render at" size, then `server.run_job` resizes it with
+`engine.resize_args` (fill, centre-crop, `-c:a copy`) and replaces the
+render. The API test measures both sizes with ffmpeg. Do not offer a size
+the 8 GB card cannot hold as a native render: the resize is the route.
+
 ## Every running download is visible
 
 A person downloading 29 GB must always see it move. Each Models-page file
@@ -69,6 +79,26 @@ engine environment. Finding the packages is not enough: the first real
 run-through found upstream's `from inspect import ArgSpec`, which crashes on
 Python 3.11+, and only an import shows that. Keep the engine importable
 without a GPU (no CUDA calls at import time) so this check works anywhere.
+
+## The self-test is the answer to "does it work"
+
+`selftest.py` + `server.run_selftest`: one 3-second two-voice clip from
+`MultiTalk/examples/multi/1`, through the normal render queue, then checks
+on what came back (frames with contrast that move, each voice audible in its
+turn, weights at least half their published size). The judgements are pure
+functions with unit tests. `MULTITALK_STUDIO_SELFTEST_STANDIN=1` exists only
+for the suite: it turns the GPU and weight-size steps into "skipped" — never
+"ok" — because the stand-in has neither. Never set it on a real install.
+
+## The tiny engine runs the real pipeline on a CPU
+
+`tests/tiny_engine/generate_multitalk.py` swaps `wan.MultiTalkPipeline` for
+a subclass whose loading builds a tiny random DiT, the full-size Wan VAE with
+random weights, and stubs for umT5/CLIP of the real output shapes; then calls
+the real `generate()`. It runs in float32 (upstream leans on CUDA autocast
+to mix bf16 and float32, which does nothing for CPU tensors) and hides
+xformers (no CPU kernels). It is how the `--t5_cpu` crash was found: use it
+after engine changes, with `make_weights.py` for the weights folder.
 
 ## Validation gate
 

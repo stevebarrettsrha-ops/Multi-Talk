@@ -263,6 +263,14 @@ def _parse_args():
         default=8,
         help="Overlap between VAE tiles in latent pixels."
     )
+    parser.add_argument(
+        "--bucket_ratio",
+        type=float,
+        default=None,
+        help="Render at the size bucket nearest this height/width ratio "
+             "(0.5 for 2:1 landscape, 1.78 for 9:16 portrait) instead of the "
+             "reference picture's own; the picture is centre-cropped to it."
+    )
     
     args = parser.parse_args()
 

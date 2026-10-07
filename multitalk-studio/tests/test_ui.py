@@ -100,7 +100,23 @@ def run(slow: bool = False) -> Suite:
             s.check("a clip opens in the lightbox with its recipe",
                     page.locator("#lightbox").is_visible()
                     and "480 px" in page.locator("#lbMeta").text_content())
+            s.check("the lightbox shows the clip's exact size, 720 × 360",
+                    "720 × 360" in page.locator("#lbMeta").text_content(),
+                    page.locator("#lbMeta").text_content()[:200])
             page.click("#lbClose")
+
+            page.click("#btnSettings")
+            s.equal("the video size defaults to 720 × 360",
+                    page.locator("#segOutput button.on").get_attribute("data-v"),
+                    "720x360")
+            page.click('#segOutput [data-v="720x1280"]')
+            s.check("picking 720 × 1280 says it renders then resizes to it",
+                    "exactly 720 × 1280" in page.locator("#costNote").text_content(),
+                    page.locator("#costNote").text_content())
+            if shots:
+                page.screenshot(path=f"{shots}/output-size.png")
+            page.click('#segOutput [data-v="720x360"]')
+            page.click("#btnCloseSettings")
 
             page.click('#segPeople [data-v="2"]')
             s.check("two people shows the right-voice button",
@@ -143,6 +159,46 @@ def run(slow: bool = False) -> Suite:
             s.check("the draft survives a reload",
                     page.locator("#ttsText").input_value() == "hello there")
             s.check("no script errors along the way", not errors, str(errors[:3]))
+            browser.close()
+
+    # -- the engine self-test, from its button --------------------------------
+    with Workspace() as ws:
+        weights = ws / "weights"
+        fake_weights(weights)
+        with studio(ws / "data", weights,
+                    env={"MULTITALK_STUDIO_SELFTEST_STANDIN": "1"}) as app, \
+                sync_playwright() as p:
+            exe = chromium()
+            browser = p.chromium.launch(**({"executable_path": exe} if exe else {}))
+            page = browser.new_page(viewport={"width": 1400, "height": 1000})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(app.url)
+            page.click('.nav[data-view="engine"]')
+            page.wait_for_selector("#testList .fitem")
+            s.equal("the self-test lists its six steps before it runs",
+                    page.locator("#testList .fitem").count(), 6)
+            page.click("#btnSelfTest")
+            page.wait_for_function(
+                "document.querySelector('#btnSelfTest').textContent === 'Testing…'",
+                timeout=10000)
+            s.check("the button says it is testing", True)
+            page.wait_for_function(
+                "document.querySelector('#testNote').textContent.startsWith('Passed')",
+                timeout=120000)
+            ok_rows = page.locator("#testList .state.ok").count()
+            s.check("it passes, with render, frames and voices each ok",
+                    ok_rows >= 4, f"{ok_rows} ok rows")
+            s.check("and says what 10 s of speech would take here",
+                    "10 s of speech" in page.locator("#testNote").text_content())
+            if os.environ.get("MT_SCREENSHOTS"):
+                page.locator("#testList").scroll_into_view_if_needed()
+                page.screenshot(path=os.environ["MT_SCREENSHOTS"] + "/selftest.png")
+            page.click("#btnTestClip")
+            page.wait_for_selector("#lightbox:not([hidden])", timeout=10000)
+            s.check("the test clip opens to watch",
+                    "self-test" in page.locator("#lbTitle").text_content().lower())
+            s.check("no script errors during the self-test", not errors, str(errors))
             browser.close()
 
     # -- downloading the weights: every running file shows its progress ------
