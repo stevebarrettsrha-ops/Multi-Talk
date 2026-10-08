@@ -144,6 +144,7 @@ def studio(data: Path, weights: Path, engine_dir: Path = FAKE_ENGINE,
     return Server([sys.executable, "server.py"], port, "/api/status",
                   env={"MULTITALK_STUDIO_PORT": str(port),
                        "MULTITALK_STUDIO_NO_BROWSER": "1",
+                       "MULTITALK_STUDIO_NO_SEARCH": "1",
                        "MULTITALK_STUDIO_DATA": str(data), **(env or {})})
 
 

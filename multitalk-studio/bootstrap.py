@@ -678,6 +678,205 @@ def torch_index(cfg: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# saved locations
+# --------------------------------------------------------------------------- #
+def rebase_path(old: str) -> Path | None:
+    """Where a path saved under an earlier location of this repo lives now.
+
+    The config keeps absolute paths — the default engine folder included.
+    Move, rename or re-extract the repo (Multi-Talk -> Multi-Talk-main,
+    C: -> D:) and every one of them points nowhere, though the engine, its
+    weights and the engine environment moved with it. The tail of the old
+    path is the same; graft it onto this repo or this app, trying the
+    longest tail first, so a renamed repo folder is no obstacle.
+    """
+    parts = [p for p in re.split(r"[\\/]+", old or "") if p]
+    for i in range(1, len(parts)):
+        tail = parts[i:]
+        if ".." in tail:
+            continue
+        for base in (REPO_DIR, APP_DIR):
+            cand = base.joinpath(*tail)
+            try:
+                if cand.exists():
+                    return cand
+            except OSError:
+                continue
+    return None
+
+
+def has_engine(path: Path | None) -> bool:
+    """The test the rest of the app uses: the engine's entry script is there."""
+    try:
+        return bool(path) and (path / "generate_multitalk.py").is_file()
+    except OSError:
+        return False
+
+
+def heal_paths(cfg: dict) -> list[str]:
+    """Repair saved paths that no longer exist. Returns what changed."""
+    notes: list[str] = []
+    old_eng = cfg.get("engine_dir") or ""
+    eng = engine_dir(cfg)
+    if not has_engine(eng):
+        for c in (rebase_path(old_eng), Path(DEFAULT_CONFIG["engine_dir"])):
+            if has_engine(c) and str(c) != old_eng:
+                cfg["engine_dir"] = str(c)
+                eng = c
+                notes.append(f"MultiTalk engine found at {c}")
+                break
+    old_w = cfg.get("weights_dir") or ""
+    if old_w and not Path(old_w).is_dir():
+        moved = rebase_path(old_w)
+        if moved and moved.is_dir():
+            cfg["weights_dir"] = str(moved)
+            notes.append(f"Weights folder found at {moved}")
+        elif (eng / "weights").is_dir():
+            cfg["weights_dir"] = ""     # the default: <engine_dir>/weights
+            notes.append(f"Weights folder found at {eng / 'weights'}")
+    py = cfg.get("python") or ""
+    if py and not Path(py).exists():
+        moved = rebase_path(py)
+        moved = moved if moved and moved.is_file() else None
+        cfg["python"] = str(moved) if moved else ""
+        notes.append(f"Engine Python {py} is gone"
+                     + (f"; using {moved}" if moved else "; cleared"))
+    return notes
+
+
+# folders never worth walking into when hunting for the engine: system trees,
+# package caches, environments, and weight folders (thousands of entries)
+_SKIP_DIRS = {"windows", "program files", "program files (x86)", "programdata",
+              "appdata", "$recycle.bin", "system volume information",
+              "recovery", "node_modules", ".git", "__pycache__",
+              "site-packages", "lib", "libs", "scripts", ".cache", ".venv",
+              "venv", "engine-venv", "weights", "proc", "sys", "dev", "snap"}
+
+
+def is_engine_dir(path: Path) -> bool:
+    """A MultiTalk checkout: the entry script and the pipeline it imports
+    (`wan/multitalk.py`, the `wan.MultiTalkPipeline` the script runs)."""
+    try:
+        return (path / "generate_multitalk.py").is_file() and \
+            (path / "wan" / "multitalk.py").is_file()
+    except OSError:
+        return False
+
+
+def search_roots() -> list[Path]:
+    """Where a full search starts: around the repo, home, then every drive."""
+    roots = [REPO_DIR.parent, Path.home()]
+    if platform.system() == "Windows":
+        roots += [Path(f"{c}:/") for c in "CDEFGHIJKLMNOPQRSTUVWXYZ"
+                  if os.path.exists(f"{c}:/")]
+    else:
+        roots += [Path("/opt"), Path("/srv"), Path("/mnt"), Path("/media")]
+    return roots
+
+
+def find_engine_installs(roots: list[Path] | None = None, max_depth: int = 6,
+                         budget: float = 45.0) -> list[Path]:
+    """Every MultiTalk checkout under `roots`, shallowest first, within a
+    time budget.
+
+    Breadth-first, so the copy a person put somewhere sensible is met long
+    before the walk wanders into deep trees, and a slow or huge drive ends
+    the search on time.
+    """
+    deadline = time.monotonic() + budget
+    found: list[Path] = []
+    seen: set[str] = set()
+    queue = [(r, 0) for r in (roots if roots is not None else search_roots())]
+    while queue and time.monotonic() < deadline:
+        path, depth = queue.pop(0)
+        try:
+            key = os.path.normcase(str(path.resolve()))
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        if is_engine_dir(path):
+            found.append(path)
+            continue                # nothing worth finding inside one
+        if depth >= max_depth:
+            continue
+        try:
+            with os.scandir(path) as it:
+                for e in it:
+                    if time.monotonic() >= deadline:
+                        break
+                    try:
+                        if not e.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    if e.name.lower() in _SKIP_DIRS or e.name.startswith("."):
+                        continue
+                    queue.append((Path(e.path), depth + 1))
+        except OSError:
+            continue
+    return found
+
+
+def pick_engine(installs: list[Path], cfg: dict) -> Path | None:
+    """The checkout to use: the one holding the weights, then the one inside
+    this repo, then the first found."""
+    def score(c: Path) -> tuple:
+        w = c / "weights"
+        weights = w.is_dir() and not missing_models(w, cfg)
+        try:
+            inside = c.resolve().is_relative_to(REPO_DIR.resolve())
+        except (OSError, ValueError):
+            inside = False
+        return (not weights, not inside)
+    return min(installs, key=score) if installs else None
+
+
+def verify_locations(cfg: dict, search: bool = True, log=None) -> list[str]:
+    """Check every saved location; repair what moved.
+
+    The quick repair (heal_paths) handles a moved repo folder. When the
+    engine is still nowhere, and `search` is on, the drives are searched.
+    """
+    say = log or (lambda _m: None)
+    notes = heal_paths(cfg)
+    if has_engine(engine_dir(cfg)) or not search:
+        return notes
+    say("Searching this computer for the MultiTalk engine…")
+    hit = pick_engine(find_engine_installs(), cfg)
+    if not hit:
+        say("No MultiTalk engine found on this computer — set its folder "
+            "in Settings.")
+        return notes
+    cfg["engine_dir"] = str(hit)
+    notes.append(f"MultiTalk engine found at {hit}")
+    w = cfg.get("weights_dir") or ""
+    if w and not Path(w).is_dir() and (hit / "weights").is_dir():
+        cfg["weights_dir"] = ""
+        notes.append(f"Weights folder found at {hit / 'weights'}")
+    return notes
+
+
+def location_report(cfg: dict) -> list[str]:
+    """One line per saved location, saying whether it checks out."""
+    eng = engine_dir(cfg)
+    out = [f"Engine: {eng} — ok" if has_engine(eng) else "Engine: not found"]
+    w = weights_dir(cfg)
+    if w.is_dir():
+        gone = missing_models(w, cfg)
+        out.append(f"Weights: {w} — " + ("all required files present"
+                                          if not gone else
+                                          f"{len(gone)} required file(s) missing"))
+    else:
+        out.append("Weights: not found")
+    py = engine_python(cfg)
+    out.append(f"Engine Python: {py} — ok" if py
+               else "Engine Python: not set up yet")
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # pip
 # --------------------------------------------------------------------------- #
 PIP_RAW = re.compile(r"^Progress (\d+) of (\d+)$")

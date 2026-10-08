@@ -50,6 +50,55 @@ cfg = load_config()
 progress = Progress()
 setup_lock = threading.Lock()
 
+# set while the start-up search walks the drives, so the Engine page says
+# "searching" instead of "missing" and Recheck does not start a second walk
+locating = threading.Event()
+_locate_lock = threading.Lock()
+
+
+def _say(msg: str) -> None:
+    print(f"[multitalk-studio] {msg}", flush=True)
+
+
+def _heal(search: bool = False) -> None:
+    """Verify the saved locations; repair any that moved.
+
+    Without `search` only the quick repair runs (a moved repo folder). With
+    it, an engine that is still nowhere is searched for across the drives.
+    MULTITALK_STUDIO_NO_SEARCH=1 turns all of it off: the tests' configs
+    point at made-up folders on purpose, and must not adopt a real checkout.
+    """
+    if os.environ.get("MULTITALK_STUDIO_NO_SEARCH") == "1":
+        locating.clear()
+        return
+    # a quick repair skips a turn when another check holds the lock; a search
+    # waits for it (it is owed: `locating` is already set for it)
+    if not _locate_lock.acquire(blocking=search):
+        return
+    try:
+        if search:
+            locating.set()
+        notes = bootstrap.verify_locations(cfg, search=search, log=_say)
+        if notes:
+            save_config(cfg)
+            manager.forget()
+            for n in notes:
+                _say(n)
+        if search:
+            for line in bootstrap.location_report(cfg):
+                _say("Verified " + line)
+    finally:
+        if search:
+            locating.clear()
+        _locate_lock.release()
+
+
+def _needs_search() -> bool:
+    return not bootstrap.has_engine(bootstrap.engine_dir(cfg))
+
+
+_heal()
+
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 gallery_lock = threading.Lock()
@@ -391,7 +440,17 @@ def api_preflight():
 def api_deps():
     if request.args.get("fresh"):
         manager.forget()
-    return jsonify({"items": manager.dependencies(cfg),
+    if not locating.is_set():
+        _heal()
+        if _needs_search() and \
+                os.environ.get("MULTITALK_STUDIO_NO_SEARCH") != "1":
+            # Recheck with the engine still nowhere: search the drives, in
+            # the background — the page polls and the row says "searching"
+            locating.set()
+            threading.Thread(target=_heal, args=(True,), daemon=True).start()
+    searching = locating.is_set()
+    return jsonify({"items": manager.dependencies(cfg, searching=searching),
+                    "searching": searching,
                     "torch_index": cfg.get("torch_index", "")})
 
 
@@ -839,6 +898,13 @@ def _warm_gpu() -> None:
         bootstrap.gpu_info(python)
 
 
+def boot() -> None:
+    """Verify every saved location (searching the drives if the engine is
+    lost), then read the GPU."""
+    _heal(search=True)
+    _warm_gpu()
+
+
 def main() -> None:
     for s in (sys.stdout, sys.stderr):
         try:
@@ -848,7 +914,8 @@ def main() -> None:
     for d in (DATA_DIR, CLIPS_DIR, UPLOADS_DIR, JOBS_DIR):
         d.mkdir(parents=True, exist_ok=True)
     threading.Thread(target=worker, daemon=True).start()
-    threading.Thread(target=_warm_gpu, daemon=True).start()
+    # the page can open while the saved locations are checked
+    threading.Thread(target=boot, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}"
     print(f"\n  MultiTalk Studio  ->  {url}\n")
     if os.environ.get("MULTITALK_STUDIO_NO_BROWSER") != "1":
