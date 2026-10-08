@@ -367,6 +367,14 @@ def failure(state: dict, code: int) -> str:
                 "and the text encoder on the CPU, and close anything else "
                 "using the GPU.")
     text = "\n".join(state["tail"])
+    # 0xC0000005, Windows' access violation: a native crash with no Python
+    # traceback. Seen while the 16.5 GB INT8 weights load into RAM.
+    if code in (3221225477, -1073741819):
+        return ("The engine crashed (Windows access violation) while "
+                "loading the model, almost always because RAM and the page "
+                "file ran out. Close other programs, let Windows manage the "
+                "page file size (or set it to 32 GB+ on a fast drive), then "
+                "try again.")
     if "Torch not compiled with CUDA enabled" in text:
         return ("PyTorch in the engine environment is the CPU build. On the "
                 "Engine page press Reinstall next to PyTorch to get the CUDA "

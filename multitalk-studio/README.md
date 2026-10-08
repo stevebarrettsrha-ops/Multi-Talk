@@ -253,6 +253,12 @@ code. Upstream behaviour is unchanged unless a new option is used.
   picks the size bucket by the wanted height / width instead of the
   picture's. The picture is then centre-cropped to it, as for any bucket.
   The studio uses this for the 720 × 360 and 720 × 1280 outputs.
+- **The INT8 model loads once into RAM** (`wan/multitalk.py`). Upstream's
+  `optimum.quanto.requantize` builds the whole DiT empty on the CPU and then
+  copies the 16.5 GB file into it, so loading briefly needed twice the file
+  in RAM. On a 32 GB Windows PC that ran out of memory and the engine died
+  with exit code 3221225477 (an access violation) right after "Loading
+  Quantized LoRA". The loaded tensors now become the model's directly.
 - **Encode and decode are announced.** `[clip] encoding…` and
   `[clip] decoding…` lines let the job card say "reading the picture" and
   "decoding the frames" instead of sitting on the last step.
