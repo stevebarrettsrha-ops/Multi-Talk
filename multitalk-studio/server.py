@@ -53,6 +53,12 @@ setup_lock = threading.Lock()
 # set while the start-up search walks the drives, so the Engine page says
 # "searching" instead of "missing" and Recheck does not start a second walk
 locating = threading.Event()
+# When the last search ended. The page re-polls while "searching"; a poll
+# right after a fruitless search must show "not found" (and Install), not
+# start the next walk of the drives — so Recheck searches again only after
+# this rest.
+_search_done = [float("-inf")]
+SEARCH_REST = 30.0
 _locate_lock = threading.Lock()
 
 
@@ -89,12 +95,17 @@ def _heal(search: bool = False) -> None:
                 _say("Verified " + line)
     finally:
         if search:
+            _search_done[0] = time.monotonic()
             locating.clear()
         _locate_lock.release()
 
 
 def _needs_search() -> bool:
     return not bootstrap.has_engine(bootstrap.engine_dir(cfg))
+
+
+def _rested() -> bool:
+    return time.monotonic() - _search_done[0] > SEARCH_REST
 
 
 _heal()
@@ -442,7 +453,7 @@ def api_deps():
         manager.forget()
     if not locating.is_set():
         _heal()
-        if _needs_search() and \
+        if _needs_search() and _rested() and \
                 os.environ.get("MULTITALK_STUDIO_NO_SEARCH") != "1":
             # Recheck with the engine still nowhere: search the drives, in
             # the background — the page polls and the row says "searching"
