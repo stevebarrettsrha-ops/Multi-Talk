@@ -91,8 +91,9 @@ PyTorch's own fused attention without them.
 
 ## Making a clip
 
-1. **Picture.** A photo or drawing of the people. Cartoons work. The output
-   keeps the picture's aspect ratio.
+1. **Picture.** A photo or drawing of the people. Cartoons work. It is
+   centre-cropped to the video's shape (below), so keep the faces away
+   from the edges.
 2. **People.** One or two. With two, voice 1 drives the person on the
    **left** of the picture and voice 2 the **right**.
 3. **Speech.**
@@ -110,7 +111,8 @@ The **Settings** popover has the controls that matter on a small card:
 
 | Setting | Default on 8 GB | Notes |
 |---|---|---|
-| Size | 480 px | 320 px is a fast draft. 640 px is the trained size and wants 12 GB+. |
+| Video | 720 × 360 | The finished file's exact size: **720 × 360** (landscape) or **720 × 1280** (portrait). Nothing else is offered. |
+| Render at | 480 px | 320 px is a fast draft. 640 px is the trained size and wants 12 GB+. |
 | Steps | 8 (FusionX) / 40 (base) | Lower is faster. Lip sync survives low step counts; motion detail does not. |
 | Prompt strength | 1 (FusionX) / 5 (base) | 1 skips one of three model passes per step. |
 | Lip-sync strength | 2 (FusionX) / 4 (base) | Raise it if the mouth lags the audio. |
@@ -118,11 +120,55 @@ The **Settings** popover has the controls that matter on a small card:
 | Tiled VAE | on | Turn it off only on 12 GB+. |
 | Text encoder on CPU | on | Turn it off only on 16 GB+. |
 
+### Why "render at" and "video" are two settings
+
+MultiTalk draws at fixed size buckets whose sides are multiples of 32, so
+neither output size can be drawn directly. 360 is not a multiple of 32, and
+720 × 1280 would need about 33 GB of VRAM. So the engine renders the bucket
+with the output's shape (`--bucket_ratio`), then the studio resizes the
+finished clip to the exact pixels with ffmpeg (Lanczos, fill and centre-crop,
+H.264 CRF 18, sound copied):
+
+| Video | Render at 320 px | Render at 480 px (8 GB default) | Render at 640 px |
+|---|---|---|---|
+| 720 × 360 | 448 × 224 → ×1.6 | 672 × 352 → ×1.07 | 896 × 448 → ×0.8 |
+| 720 × 1280 | 224 × 416 → ×3.2 | 352 × 640 → ×2 | 448 × 832 → ×1.6 |
+
+On an 8 GB card, 720 × 360 is drawn at nearly its full size. 720 × 1280 is
+drawn at about half size and upscaled 2×, with a light sharpen. It is the
+right size and shape, but softer than a native render. The job card shows
+"Resizing to 720 × 360" as its last step, and the clip's details list both
+the final size and the size it was drawn at.
+
 Every finished clip lands in the feed and the Library with its full recipe.
 **Reuse settings** loads the picture, audio and settings back into the bar.
 Each running job has a **Log** button that shows the engine's own output.
-If a render runs out of GPU memory, the job card says so and suggests what
-to turn down.
+If a render runs out of GPU memory, the job card says so, suggests what
+to turn down, and names any other program holding memory on the card.
+
+---
+
+## Does it actually work?
+
+Every row on the Engine page can read ok while the first render still
+fails. The weights might never have finished downloading, PyTorch might
+not see the card, or the engine might crash on its first step. So the
+Engine page has **Test the engine**. It renders one 3-second clip of
+MultiTalk's own two-voice example, a man and a woman taking turns, then
+checks each step:
+
+| Step | What it checks |
+|---|---|
+| The engine environment imports the engine | The engine's code loads, and its argument parser runs |
+| PyTorch can see an NVIDIA card | The card's name and memory |
+| Every weight file is whole | Each file is present and at least half its published size, so a cut-off download fails |
+| A 3-second two-voice clip renders | Timed: the first real number for your card |
+| The video has frames, not blank, and they move | A black or frozen clip fails |
+| Both voices are audible, each in its turn | Voice 1, then voice 2; silence fails |
+
+It stops at the first step that breaks and says what to fix. When it
+passes, it also estimates how long 10 seconds of speech takes on your
+machine. The test clip goes into the Library so you can watch it.
 
 ---
 
@@ -151,8 +197,23 @@ python tests/run.py gate       # compile, script parse, ids, wiring
 The engine patches have their own CPU test: `python
 ../MultiTalk/tests/test_lowvram_patches.py`. It needs torch.
 
-What the tests cannot cover is the real model on a real GPU. The weights
-could not be downloaded where this was built. The first real render on the
+**`tests/tiny_engine/`** runs the real MultiTalk code end to end on a CPU,
+with tiny random weights instead of the 29 GB set:
+
+- **Real:** argument parsing, the two-voice audio preparation, wav2vec2,
+  the full generation loop with the two-person masks, the DiT class, the
+  Wan VAE at full size, and the ffmpeg mux.
+- **Stubbed:** only the text and image encoders.
+
+Point the studio's engine folder at it, and its weights folder at one
+built by `tests/tiny_engine/make_weights.py`. A render from the page then
+gives a real MP4 with the real two-voice soundtrack. The picture is noise,
+because the weights are random. This found the text-encoder-on-CPU crash
+listed below. At 4 CPU cores, one 81-frame clip takes about 6 minutes,
+almost all of it the VAE.
+
+What these tests cannot cover is the real model on a real GPU. The weights
+could not be downloaded where this was built. **Test the engine** on the
 RTX 4060 is the remaining check.
 
 ---
@@ -184,3 +245,14 @@ code. Upstream behaviour is unchanged unless a new option is used.
 - **Imports without a GPU.** The T5 module asked CUDA for a device at import
   time. It now asks when the encoder is built, so Setup's last step can
   import the whole engine to prove it loads.
+- **The text encoder works on the CPU** (`wan/multitalk.py`). With `--t5_cpu`,
+  the 8 GB default, upstream passed the prompt features as `[[tensor]]`.
+  The model died on its first step with "'list' object has no attribute
+  'dtype'". The tiny-engine run found it.
+- **`--bucket_ratio`** (`wan/multitalk.py`, `generate_multitalk.py`)
+  picks the size bucket by the wanted height / width instead of the
+  picture's. The picture is then centre-cropped to it, as for any bucket.
+  The studio uses this for the 720 × 360 and 720 × 1280 outputs.
+- **Encode and decode are announced.** `[clip] encoding…` and
+  `[clip] decoding…` lines let the job card say "reading the picture" and
+  "decoding the frames" instead of sitting on the last step.

@@ -13,6 +13,8 @@ import requests
 from harness import (SAMPLE_PNG, SAMPLE_WAV, Suite, Workspace, fake_weights,
                      finish, hub, studio, upload, wait_for)
 
+import selftest  # noqa: E402  (harness puts the app on the path)
+
 
 def gen(url: str, **body) -> requests.Response:
     return requests.post(url + "/api/generate", json=body, timeout=30)
@@ -111,6 +113,36 @@ def run(slow: bool = False) -> Suite:
                     and "video/mp4" in body.headers.get("Content-Type", ""))
             s.check("the scratch audio folder is cleaned up",
                     not (jdir / "audio").exists())
+
+            # -- the two output sizes, exact ------------------------------------
+            ffmpeg = selftest.find_ffmpeg("")
+            s.check("the engine is told the landscape bucket (h / w = 0.5)",
+                    argv[argv.index("--bucket_ratio") + 1] == "0.5000")
+            if ffmpeg:
+                s.equal("the clip is exactly 720 × 360 by default",
+                        selftest.video_size(ffmpeg, ws / "data" / "clips"
+                                            / f"{c['id']}.mp4"), (720, 360))
+            s.check("the gallery records the final and the rendered size",
+                    (c["output"], c["width"], c["height"]) == ("720x360", 720, 360)
+                    and c["render_width"] > 0 and c["render_height"] > 0, str(c)[:300])
+            r = gen(u, image=img["name"], audio1=wav["name"], mode="clip",
+                    output="720x1280")
+            s.check("a portrait render queues", r.ok, r.text[:200])
+            finish(u)
+            tall = r.json()["jobs"][0]
+            targv = json.loads((ws / "data" / "jobs" / tall / "argv.json").read_text())
+            s.check("the engine is told the portrait bucket",
+                    abs(float(targv[targv.index("--bucket_ratio") + 1]) - 1280 / 720) < 1e-3)
+            if ffmpeg:
+                s.equal("the portrait clip is exactly 720 × 1280",
+                        selftest.video_size(ffmpeg, ws / "data" / "clips"
+                                            / f"{tall}.mp4"), (720, 1280))
+            s.check("no half-step file is left after resizing",
+                    not list((ws / "data" / "clips").glob("*.sized.mp4")))
+            r = gen(u, image=img["name"], audio1=wav["name"], output="1920x1080")
+            s.check("any other output size is refused",
+                    r.status_code == 400 and "720" in r.json()["error"], r.text[:200])
+            requests.delete(u + "/api/clip/" + tall, timeout=10)
 
             # -- two people, typed --------------------------------------------
             r = gen(u, image=img["name"], people=2, source="tts",
@@ -247,4 +279,51 @@ def run(slow: bool = False) -> Suite:
                 s.check("deleting a weight works and the app notices",
                         r.ok and not requests.get(u + "/api/status",
                                                   timeout=10).json()["ready"])
+        # -- the self-test --------------------------------------------------
+        def selftest_run(app_url):
+            r = requests.post(app_url + "/api/selftest", timeout=10)
+            assert r.ok, r.text
+            wait_for(lambda: not requests.get(app_url + "/api/selftest",
+                                              timeout=10).json()["running"], 120)
+            return requests.get(app_url + "/api/selftest", timeout=10).json()
+
+        def states(d):
+            return {x["key"]: x["state"] for x in d["steps"]}
+
+        with studio(ws / "data5", weights,
+                    env={"MULTITALK_STUDIO_SELFTEST_STANDIN": "1"}) as app:
+            d = selftest_run(app.url)
+            s.check("the self-test passes a render with frames and two voices",
+                    d["ok"] is True, str([(x["key"], x["state"], x["detail"][:60])
+                                          for x in d["steps"]]))
+            st = states(d)
+            s.check("on the stand-in, GPU and weight sizes say skipped, not ok",
+                    st["gpu"] == "skipped" and st["weights"] == "skipped")
+            s.check("the render, the frames and the voices are each checked",
+                    st["render"] == st["frames"] == st["voices"] == "ok")
+            s.check("it reports the time and what 10 s would take",
+                    d["took"] is not None and "10 s" in d["estimate"])
+            clips = requests.get(app.url + "/api/clips", timeout=10).json()
+            s.check("the test clip lands in the library to watch",
+                    any(c["id"] == d["clip"] and c["people"] == 2 for c in clips))
+            again = selftest_run(app.url)
+            s.check("the self-test can be run again", again["ok"] is True)
+        with studio(ws / "data6", weights,
+                    env={"MULTITALK_STUDIO_SELFTEST_STANDIN": "1",
+                         "FAKE_BLANK": "1"}) as app:
+            d = selftest_run(app.url)
+            st = states(d)
+            s.check("a render that came back black stops at the frames step",
+                    d["ok"] is False and st["frames"] == "fail"
+                    and st["voices"] == "skipped",
+                    str([(x["key"], x["state"], x["detail"][:60])
+                         for x in d["steps"]]))
+        with studio(ws / "data7", weights) as app:
+            d = selftest_run(app.url)
+            st = states(d)
+            fail = next(x for x in d["steps"] if x["state"] == "fail")
+            s.check("with no GPU (and no stand-in switch) it stops at the GPU, "
+                    "never passes",
+                    d["ok"] is False and st["gpu"] == "fail"
+                    and "driver" in fail["detail"], fail["detail"])
     return s

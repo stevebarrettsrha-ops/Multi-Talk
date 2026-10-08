@@ -13,7 +13,8 @@ from harness import ROOT, Suite
 
 import bootstrap                                    # noqa: E402
 import engine                                       # noqa: E402
-import manager                                      # noqa: E402
+import manager  # noqa: E402
+import selftest                                      # noqa: E402
 
 REAL_ENGINE = ROOT.parent / "MultiTalk"
 GIB = 1024 ** 3
@@ -63,6 +64,32 @@ def run(slow: bool = False) -> Suite:
                                     Path("/c/x")) if a.startswith("--")}
     s.check("every flag the studio builds is one generate_multitalk.py knows",
             flags <= known, f"unknown: {sorted(flags - known)}")
+
+    # -- the two output sizes ------------------------------------------------
+    s.equal("two outputs only: 720 × 360 and 720 × 1280",
+            sorted((o["w"], o["h"]) for o in engine.OUTPUTS.values()),
+            [(720, 360), (720, 1280)])
+    s.equal("720 × 360 is the default", engine.DEFAULT_OUTPUT, "720x360")
+    ja = engine.argv(cfg, engine.normalize(dict(BASE), cfg), Path("/j/in.json"),
+                     Path("/j/a"), Path("/c/x"))
+    jp = engine.argv(cfg, engine.normalize(dict(BASE, output="720x1280"), cfg),
+                     Path("/j/in.json"), Path("/j/a"), Path("/c/x"))
+    s.equal("landscape asks the engine for the 2:1 bucket",
+            ja[ja.index("--bucket_ratio") + 1], "0.5000")
+    s.equal("portrait asks for the 9:16 bucket",
+            jp[jp.index("--bucket_ratio") + 1], "1.7778")
+    s.fails_with("any other output size is refused",
+                 lambda: engine.normalize(dict(BASE, output="1280x720"), cfg),
+                 engine.BadRequest, "720")
+    ra = engine.resize_args("ffmpeg", Path("a.mp4"), Path("b.mp4"), 720, 360, 1.07)
+    vf = ra[ra.index("-vf") + 1]
+    s.check("the resize fills the frame, crops to the exact size, keeps the sound",
+            "scale=720:360:force_original_aspect_ratio=increase" in vf
+            and "crop=720:360" in vf and ra[ra.index("-c:a") + 1] == "copy", vf)
+    s.check("a near-1x resize is not sharpened", "unsharp" not in vf)
+    rp = engine.resize_args("ffmpeg", Path("a.mp4"), Path("b.mp4"), 720, 1280, 2.0)
+    s.check("a 2x upscale gets a light sharpen",
+            "unsharp" in rp[rp.index("-vf") + 1])
 
     # -- normalize -----------------------------------------------------------
     s.fails_with("no picture is a clear refusal",
@@ -168,6 +195,18 @@ def run(slow: bool = False) -> Suite:
             f"{mid['pct']} {mid['stage']}")
     s.check("the save bar does not count as sampling",
             st["stage"] == "Finished" and st["pct"] == 99)
+    ph = engine.new_state()
+    for ln in ("INFO: [clips] total=2 frames=140 steps=8",
+               "INFO: [clip] 1 start_frame=0 frames=81",
+               "INFO: [clip] encoding the reference frames"):
+        engine.read_line(ph, ln)
+    s.equal("the picture being read is named on the card", ph["stage"],
+            "Clip 1 of 2 · reading the picture")
+    for ln in [f" 50%|##| {i}/8 [00:01<00:01]" for i in range(9)] + \
+            ["INFO: [clip] decoding the frames"]:
+        engine.read_line(ph, ln)
+    s.equal("and so is decoding, after the last step", ph["stage"],
+            "Clip 1 of 2 · decoding the frames")
     oom = engine.new_state()
     engine.read_line(oom, "torch.OutOfMemoryError: CUDA out of memory.")
     s.check("out of memory is explained in plain words",
@@ -176,6 +215,15 @@ def run(slow: bool = False) -> Suite:
     engine.read_line(miss, "ModuleNotFoundError: No module named 'misaki'")
     s.check("a missing package points at the Engine page",
             "Engine page" in engine.failure(miss, 1))
+    cpu = engine.new_state()
+    engine.read_line(cpu, "AssertionError: Torch not compiled with CUDA enabled")
+    s.check("a CPU build of PyTorch is named, with Reinstall",
+            "CPU build" in engine.failure(cpu, 1)
+            and "Reinstall" in engine.failure(cpu, 1))
+    drv = engine.new_state()
+    engine.read_line(drv, "RuntimeError: Found no NVIDIA driver on your system.")
+    s.check("a missing driver is named as the driver",
+            "driver" in engine.failure(drv, 1))
 
     # -- preflight -----------------------------------------------------------
     peak = bootstrap.peak_ram(cfg)
@@ -223,6 +271,109 @@ def run(slow: bool = False) -> Suite:
     s.check("importing the real T5 module no longer needs a GPU",
             "device=torch.cuda.current_device()," not in
             (REAL_ENGINE / "wan/modules/t5.py").read_text())
+
+    # -- progress reporting ----------------------------------------------------
+    import subprocess as _sp
+    ver = _sp.run([sys.executable, "-m", "pip", "--version"], capture_output=True,
+                  text=True).stdout.split()[1]
+    want = tuple(int(x) for x in ver.split(".")[:2]) >= (24, 1)
+    bootstrap._PIP_RAW_OK.clear()
+    s.equal(f"raw pip progress is detected by asking pip itself (pip {ver})",
+            bootstrap.pip_has_raw_progress(sys.executable), want)
+    real_stream = bootstrap.stream
+    try:
+        def fake_stream(cmd, on_line, **kw):
+            for ln in ("Downloading torch-2.4.1-cp311-none.whl (797 MB)",
+                       "Progress 0 of 800", "Progress 200 of 800",
+                       "Progress 400 of 800", "Progress 800 of 800",
+                       "Installing collected packages: torch"):
+                on_line(ln)
+            return 0
+        bootstrap.stream = fake_stream
+        bootstrap._PIP_RAW_OK["fake-python"] = True
+        calls = []
+        bootstrap.pip_install("fake-python", ["torch"], lambda m: None,
+                              lambda pct, d: calls.append(pct))
+        s.equal("every pip progress line reaches the bar, none dropped",
+                calls, [0.0, 25.0, 50.0, 100.0, None])
+    finally:
+        bootstrap.stream = real_stream
+        bootstrap._PIP_RAW_OK.pop("fake-python", None)
+    tasks = manager.Tasks()
+    big = tasks.add(manager.Task("download", "the 16 GB model"))
+    for i in range(30):
+        tasks.add(manager.Task("download", f"small {i}")).set(state="done")
+    for i in range(3):
+        tasks.add(manager.Task("download", f"running {i}"))
+    shown = tasks.visible()
+    s.check("the task list never drops a running download, however old",
+            big in shown and sum(t.state == "running" for t in shown) == 4)
+    s.equal("and still caps the finished ones",
+            sum(t.state == "done" for t in shown), 25)
+    t = manager.Task("download", "x")
+    s.check("a task reports bytes and whether it is merely busy",
+            {"got", "total", "busy"} <= set(t.view()))
+
+    real_run = bootstrap._run
+    try:
+        class Out:
+            stdout = ("1234, C:\\Program Files\\Steam, Inc\\steam.exe, 812\n"
+                      "99, chrome.exe, 1450\n")
+        bootstrap._run = lambda *a, **k: Out()
+        real_which = bootstrap.shutil.which
+        bootstrap.shutil.which = lambda n: "/usr/bin/nvidia-smi"
+        procs = bootstrap.gpu_processes()
+    finally:
+        bootstrap._run = real_run
+        bootstrap.shutil.which = real_which
+    s.equal("other programs on the card are read, commas in paths and all",
+            [(p["name"], p["mb"]) for p in procs],
+            [("steam.exe", 812), ("chrome.exe", 1450)])
+
+    # -- the self-test's judgements ------------------------------------------
+    import random as _r
+    flat = [bytes([128]) * 64 for _ in range(81)]
+    s.check("blank frames fail the self-test",
+            not selftest.judge_frames(selftest.frame_stats(flat), 81)[0])
+    def noise(seed):
+        g = _r.Random(seed)
+        return bytes(g.randrange(256) for _ in range(64))
+    still = [noise(1)] * 81
+    s.check("a still picture fails it too",
+            not selftest.judge_frames(selftest.frame_stats(still), 81)[0])
+    moving = [noise(i) for i in range(81)]
+    s.check("frames with contrast that change pass",
+            selftest.judge_frames(selftest.frame_stats(moving), 81)[0])
+    s.check("too few frames fail",
+            not selftest.judge_frames(selftest.frame_stats(moving[:20]), 81)[0])
+    rate = 8000
+    tone = [int(8000 * math.sin(i / 3)) for i in range(rate)]
+    hush = [0] * rate
+    s.check("two voices, each in its turn, pass",
+            selftest.judge_voices(tone + tone + hush, rate, [1, 1], 3)[0])
+    ok, why = selftest.judge_voices(tone + hush + hush, rate, [1, 1], 3)
+    s.check("the second voice silent in its turn fails, naming it",
+            not ok and "Voice 2" in why, why)
+    s.check("a silent soundtrack fails",
+            not selftest.judge_voices(hush * 3, rate, [1, 1], 3)[0])
+    s.check("no soundtrack fails",
+            not selftest.judge_voices([], rate, [1, 1], 3)[0])
+    with tempfile.TemporaryDirectory() as tmp:
+        w = Path(tmp)
+        for item in bootstrap.model_set(cfg):
+            t = bootstrap.model_path(w, item)
+            if item["prefix"]:
+                t.mkdir(parents=True, exist_ok=True)
+                (t / "x.json").write_text("{}")
+            else:
+                t.parent.mkdir(parents=True, exist_ok=True)
+                t.write_bytes(b"placeholder")
+        ok, why = selftest.weights_whole(w, dict(cfg))
+        s.check("placeholder weights are caught by size, not passed as present",
+                not ok and "Too small" in why, why[:120])
+    ex = REAL_ENGINE.joinpath(*selftest.EXAMPLE)
+    s.check("MultiTalk's two-voice example the self-test uses is in the repo",
+            all((ex / f).is_file() for f in selftest.EXAMPLE_FILES.values()))
 
     # -- the weight set ------------------------------------------------------
     items = bootstrap.model_set(cfg)

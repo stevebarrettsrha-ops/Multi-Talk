@@ -686,12 +686,16 @@ _PIP_RAW_OK: dict[str, bool] = {}
 
 
 def pip_has_raw_progress(python: str) -> bool:
+    """Whether this pip takes --progress-bar raw (pip 24.1 and newer).
+
+    Asked by letting pip parse the flag: an older pip rejects the choice
+    and exits 2, a newer one prints its help and exits 0. Reading the help
+    text instead broke on how the console wraps it."""
     if python not in _PIP_RAW_OK:
-        ok = False
         try:
-            out = _run([python, "-m", "pip", "install", "--help"], timeout=60)
-            at = out.stdout.find("--progress-bar")
-            ok = at >= 0 and "raw" in out.stdout[at:at + 300]
+            out = _run([python, "-m", "pip", "install", "--progress-bar", "raw",
+                        "--help"], timeout=60)
+            ok = out.returncode == 0
         except Exception:  # noqa: BLE001
             ok = False
         _PIP_RAW_OK[python] = ok
@@ -720,8 +724,8 @@ def pip_install(python: str, args: list[str], log, on_pct=None,
             now = time.time()
             if got < cur["base"] or not cur["started"]:
                 cur["base"], cur["started"] = got, now
-            if now - cur["last"] < 0.4 and not (total and got >= total):
-                return
+            # pip already limits raw progress to four lines a second; every
+            # one is passed on, so a fast wheel still shows its middle
             cur["last"] = now
             speed = (got - cur["base"]) / max(now - cur["started"], .1)
             eta = (total - got) / speed if speed > 0 and total else 0
@@ -920,6 +924,7 @@ ENGINE_CHECK = (
     "import torch;"
     "print(json.dumps({'missing':bad,'torch':torch.__version__,"
     "'cuda':torch.cuda.is_available(),"
+    "'build':(torch.version.cuda or ''),"
     "'xformers':importlib.util.find_spec('xformers') is not None}))"
 )
 
@@ -979,11 +984,82 @@ def make_venv(python: str, log) -> Path:
     return vpy
 
 
+def torch_build(python: str) -> tuple[str, str]:
+    """(version, CUDA build) of the torch in that environment, read from
+    torch/version.py by its own interpreter without importing torch — or
+    ("", "") when there is none. The build is "" for a CPU wheel."""
+    code = ("import importlib.util,pathlib,re;"
+            "s=importlib.util.find_spec('torch');"
+            "t=pathlib.Path(s.origin).with_name('version.py').read_text() if s else '';"
+            "v=re.search(r\"__version__\\s*=\\s*['\\\"]([^'\\\"]+)\",t);"
+            "c=re.search(r\"cuda\\s*(?::\\s*[^=]+)?=\\s*['\\\"]([^'\\\"]*)\",t);"
+            "print((v.group(1) if v else '')+'|'+(c.group(1) if c else ''))")
+    try:
+        out = _run([python, "-c", code], timeout=60)
+        if out.returncode == 0 and "|" in out.stdout:
+            version, build = out.stdout.strip().splitlines()[-1].split("|", 1)
+            return version, build
+    except Exception:  # noqa: BLE001
+        pass
+    return "", ""
+
+
+def gpu_processes() -> list[dict]:
+    """Programs holding memory on the card, from nvidia-smi. Out of memory on
+    8 GB is very often someone else's — a browser, a game launcher — and
+    "close something" helps nobody who cannot see what."""
+    exe = shutil.which("nvidia-smi") or (
+        r"C:\Windows\System32\nvidia-smi.exe"
+        if platform.system() == "Windows" else "")
+    if not exe:
+        return []
+    try:
+        out = _run([exe, "--query-compute-apps=pid,process_name,used_memory",
+                    "--format=csv,noheader,nounits"], timeout=20)
+    except Exception:  # noqa: BLE001
+        return []
+    found = []
+    for line in out.stdout.splitlines():
+        # split on the first and last comma: a path can hold one
+        head, _, mem = line.rpartition(",")
+        pid, _, name = head.partition(",")
+        try:
+            # either slash: nvidia-smi names Windows paths with backslashes
+            short = name.strip().replace("\\", "/").rsplit("/", 1)[-1]
+            found.append({"pid": int(pid), "name": short,
+                          "mb": int(float(mem))})
+        except ValueError:
+            continue
+    return found
+
+
+def wants_cuda(index: str) -> bool:
+    return "/cu" in (index or "")
+
+
 def install_torch(cfg: dict, python: str, log, on_pct=None,
                   should_cancel=None) -> None:
     index = torch_index(cfg)
+    # pip counts torch 2.4.1+cpu as satisfying torch==2.4.1, so asking for
+    # the CUDA build over a CPU one changes nothing — the trap the sibling
+    # studios hit with an RTX 4060 that kept the CPU wheel through every
+    # Reinstall. A build that does not match the index is removed first.
+    version, build = torch_build(python)
+    if version and wants_cuda(index) and not build:
+        log(f"torch {version} is the CPU build; removing it so the CUDA "
+            "build can take its place.")
+        if stream([python, "-m", "pip", "uninstall", "-y", "torch",
+                   "torchvision", "torchaudio"], lambda ln: log(ln[:200]),
+                  should_cancel=should_cancel) != 0:
+            raise RuntimeError("Could not remove the CPU build of PyTorch — "
+                               "close anything using the engine environment "
+                               "and press Reinstall again.")
     args = list(TORCH_SPEC) + (["--index-url", index] if index else [])
     pip_install(python, args, log, on_pct, should_cancel)
+    version, build = torch_build(python)
+    if wants_cuda(index) and version and not build:
+        raise RuntimeError(f"pip left torch {version}, a CPU build, in place "
+                           "of the CUDA build — press Reinstall again.")
     if cfg.get("want_xformers", True):
         # optional: the engine falls back to PyTorch attention without it.
         # --no-deps, or a mismatched wheel would drag torch to another build
@@ -1025,7 +1101,10 @@ def run_setup(cfg: dict, prog: Progress) -> None:
 
         prog.begin("torch")
         have = check_engine(str(vpy))
-        if have.get("torch", "").startswith("2.4.1") and have.get("cuda"):
+        # the build, not cuda.is_available(): a card the driver hides still
+        # wants the CUDA wheel, and a CPU wheel must not be kept (rule above)
+        if have.get("torch", "").startswith("2.4.1") and (
+                have.get("build") or not wants_cuda(torch_index(cfg))):
             prog.finish("torch", f"torch {have['torch']} already installed")
         else:
             prog.track("torch", None, "Installing PyTorch — the long one…")

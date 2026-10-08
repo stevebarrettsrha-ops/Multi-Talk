@@ -8,8 +8,22 @@ import os
 import shutil
 from pathlib import Path
 
+import requests
+
 from harness import (SAMPLE_PNG, SAMPLE_WAV, Suite, Workspace, fake_weights,
-                     studio)
+                     hub, studio)
+
+# what a person sees on one Models-page row: the badge, the line under it,
+# and the bar's width — read in the page so the test sees what they see
+ROW = """(name) => {
+  const row = [...document.querySelectorAll('#setsList .frow')]
+    .find(r => r.dataset.path.endsWith(name));
+  if (!row) return null;
+  const bar = row.querySelector('.bar4');
+  return {badge: row.querySelector('.state').textContent,
+          line: row.querySelector('.dl').hidden ? '' : row.querySelector('.dl').textContent,
+          bar: bar.hidden ? null : parseFloat(bar.querySelector('i').style.width)};
+}"""
 
 
 def available() -> str:
@@ -86,7 +100,23 @@ def run(slow: bool = False) -> Suite:
             s.check("a clip opens in the lightbox with its recipe",
                     page.locator("#lightbox").is_visible()
                     and "480 px" in page.locator("#lbMeta").text_content())
+            s.check("the lightbox shows the clip's exact size, 720 × 360",
+                    "720 × 360" in page.locator("#lbMeta").text_content(),
+                    page.locator("#lbMeta").text_content()[:200])
             page.click("#lbClose")
+
+            page.click("#btnSettings")
+            s.equal("the video size defaults to 720 × 360",
+                    page.locator("#segOutput button.on").get_attribute("data-v"),
+                    "720x360")
+            page.click('#segOutput [data-v="720x1280"]')
+            s.check("picking 720 × 1280 says it renders then resizes to it",
+                    "exactly 720 × 1280" in page.locator("#costNote").text_content(),
+                    page.locator("#costNote").text_content())
+            if shots:
+                page.screenshot(path=f"{shots}/output-size.png")
+            page.click('#segOutput [data-v="720x360"]')
+            page.click("#btnCloseSettings")
 
             page.click('#segPeople [data-v="2"]')
             s.check("two people shows the right-voice button",
@@ -129,5 +159,96 @@ def run(slow: bool = False) -> Suite:
             s.check("the draft survives a reload",
                     page.locator("#ttsText").input_value() == "hello there")
             s.check("no script errors along the way", not errors, str(errors[:3]))
+            browser.close()
+
+    # -- the engine self-test, from its button --------------------------------
+    with Workspace() as ws:
+        weights = ws / "weights"
+        fake_weights(weights)
+        with studio(ws / "data", weights,
+                    env={"MULTITALK_STUDIO_SELFTEST_STANDIN": "1"}) as app, \
+                sync_playwright() as p:
+            exe = chromium()
+            browser = p.chromium.launch(**({"executable_path": exe} if exe else {}))
+            page = browser.new_page(viewport={"width": 1400, "height": 1000})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(app.url)
+            page.click('.nav[data-view="engine"]')
+            page.wait_for_selector("#testList .fitem")
+            s.equal("the self-test lists its six steps before it runs",
+                    page.locator("#testList .fitem").count(), 6)
+            page.click("#btnSelfTest")
+            page.wait_for_function(
+                "document.querySelector('#btnSelfTest').textContent === 'Testing…'",
+                timeout=10000)
+            s.check("the button says it is testing", True)
+            page.wait_for_function(
+                "document.querySelector('#testNote').textContent.startsWith('Passed')",
+                timeout=120000)
+            ok_rows = page.locator("#testList .state.ok").count()
+            s.check("it passes, with render, frames and voices each ok",
+                    ok_rows >= 4, f"{ok_rows} ok rows")
+            s.check("and says what 10 s of speech would take here",
+                    "10 s of speech" in page.locator("#testNote").text_content())
+            if os.environ.get("MT_SCREENSHOTS"):
+                page.locator("#testList").scroll_into_view_if_needed()
+                page.screenshot(path=os.environ["MT_SCREENSHOTS"] + "/selftest.png")
+            page.click("#btnTestClip")
+            page.wait_for_selector("#lightbox:not([hidden])", timeout=10000)
+            s.check("the test clip opens to watch",
+                    "self-test" in page.locator("#lbTitle").text_content().lower())
+            s.check("no script errors during the self-test", not errors, str(errors))
+            browser.close()
+
+    # -- downloading the weights: every running file shows its progress ------
+    with Workspace() as ws, hub() as hf:
+        requests.post(hf.url + "/mock/mode", json={"slow": 0.1}, timeout=10)
+        with studio(ws / "data", ws / "weights", hf_endpoint=hf.url) as app, \
+                sync_playwright() as p:
+            exe = chromium()
+            browser = p.chromium.launch(**({"executable_path": exe} if exe else {}))
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(app.url)
+            page.click('.nav[data-view="models"]')
+            page.wait_for_selector("#setsList .frow")
+            page.locator("#setsList .setrow.on button", has_text="Download").click()
+            big = "quant_model_int8_FusionX.safetensors"
+            moving = page.wait_for_function(
+                f"(() => {{ const r = ({ROW})('{big}'); "
+                "return r && r.bar > 0 && r.bar < 100 ? r : null; })()",
+                timeout=30000).json_value()
+            s.check("the biggest file's own row shows a moving bar",
+                    0 < moving["bar"] < 100, str(moving))
+            s.check("and says how far it has got",
+                    " of " in moving["line"] and moving["badge"].endswith("%"),
+                    str(moving))
+            head = page.locator("#setsList .setrow.on .setprog")
+            s.check("the set shows one overall bar while it downloads",
+                    head.is_visible() and "Downloading" in head.text_content(),
+                    head.text_content())
+            box = page.evaluate(
+                f"""(() => {{ const r = [...document.querySelectorAll('#setsList .frow')]
+                    .find(r => r.dataset.path.endsWith('{big}'));
+                  const b = r.querySelector('.bar4').getBoundingClientRect();
+                  const t = r.querySelector('.top').getBoundingClientRect();
+                  return {{w: b.width, below: b.top >= t.bottom}}; }})()""")
+            s.check("the row's bar is drawn full width, under its name",
+                    box["w"] > 300 and box["below"], str(box))
+            first = page.locator("#dlList .fitem .n b").first.text_content()
+            s.equal("the Downloads panel lists the running big file first",
+                    first, big)
+            if os.environ.get("MT_SCREENSHOTS"):
+                page.screenshot(path=os.environ["MT_SCREENSHOTS"]
+                                + "/models-downloading.png")
+            page.wait_for_function(
+                f"(() => {{ const r = ({ROW})('{big}'); "
+                "return r && r.badge === 'have it'; })()", timeout=60000)
+            s.check("when it finishes the row says so and the bar goes",
+                    page.evaluate(f"({ROW})('{big}')")["bar"] is None)
+            page.wait_for_function(
+                "document.querySelector('#setsList .setrow.on .setprog').hidden",
+                timeout=60000)
+            s.check("and the overall bar goes when the set is done", True)
             browser.close()
     return s
