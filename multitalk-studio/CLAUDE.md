@@ -100,6 +100,22 @@ to mix bf16 and float32, which does nothing for CPU tensors) and hides
 xformers (no CPU kernels). It is how the `--t5_cpu` crash was found: use it
 after engine changes, with `make_weights.py` for the weights folder.
 
+## Saved locations are verified, never trusted
+
+The config keeps absolute paths (`engine_dir` — even the default is saved
+absolute — `weights_dir`, `python`), which go stale the moment the repo is
+moved, renamed or re-extracted, and then everything reads "missing" though it
+is all on disk. `bootstrap.verify_locations()` runs at import (quick), in the
+boot thread at every start, and on every Recheck (`/api/deps`):
+`heal_paths()` grafts a stale path's tail onto the repo's current folder
+(`rebase_path`, longest tail first, so a renamed root works) and clears an
+engine Python that is gone. If the engine is still nowhere,
+`find_engine_installs()` walks the drives breadth-first under a time budget
+and `pick_engine()` prefers the checkout holding the weights. While it walks,
+`/api/deps` reports `searching` and the page re-polls.
+`MULTITALK_STUDIO_NO_SEARCH=1` (set by the test harness) turns it off: test
+configs name made-up folders on purpose.
+
 ## Validation gate
 
 ```bash

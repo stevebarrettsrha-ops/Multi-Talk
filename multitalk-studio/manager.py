@@ -137,7 +137,7 @@ def forget() -> None:
     bootstrap.forget_gpu()
 
 
-def dependencies(cfg: dict) -> list[dict]:
+def dependencies(cfg: dict, searching: bool = False) -> list[dict]:
     items: list[dict] = []
     try:
         py = bootstrap.find_python()
@@ -149,11 +149,21 @@ def dependencies(cfg: dict) -> list[dict]:
 
     eng = bootstrap.engine_dir(cfg)
     have_src = (eng / "generate_multitalk.py").exists()
-    items.append({"id": "engine", "label": "MultiTalk engine",
-                  "state": "ok" if have_src else "missing",
-                  "detail": str(eng) if have_src else
-                  f"Not found at {eng}. Point Settings at the MultiTalk folder.",
-                  "action": None})
+    if have_src:
+        items.append({"id": "engine", "label": "MultiTalk engine",
+                      "state": "ok", "detail": str(eng), "action": None})
+    elif searching:
+        items.append({"id": "engine", "label": "MultiTalk engine",
+                      "state": "warn",
+                      "detail": "Searching this computer for it — this list "
+                                "updates when the search is done.",
+                      "action": None})
+    else:
+        items.append({"id": "engine", "label": "MultiTalk engine",
+                      "state": "missing",
+                      "detail": f"Not found at {eng}. Point Settings at "
+                                "the MultiTalk folder.",
+                      "action": None})
 
     vpy = bootstrap.engine_python(cfg)
     items.append({"id": "venv", "label": "Engine environment",

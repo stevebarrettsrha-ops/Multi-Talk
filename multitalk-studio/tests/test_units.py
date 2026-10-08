@@ -9,7 +9,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from harness import ROOT, Suite
+from harness import ROOT, Suite, fake_weights
 
 import bootstrap                                    # noqa: E402
 import engine                                       # noqa: E402
@@ -436,4 +436,113 @@ def run(slow: bool = False) -> Suite:
         s.equal("sizes come from the repo when it answers", vae["size"], 99)
     finally:
         bootstrap.hf_tree = real_tree
+
+    # -- a moved repo folder: stale saved paths are found again --------------
+    real_repo, real_app = bootstrap.REPO_DIR, bootstrap.APP_DIR
+    real_default = bootstrap.DEFAULT_CONFIG["engine_dir"]
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "Multi-Talk-main"          # renamed on extraction
+        app = repo / real_app.name
+        eng = repo / "MultiTalk"
+        (eng / "weights").mkdir(parents=True)
+        (eng / "generate_multitalk.py").write_text("")
+        vpy = app / "engine-venv" / "Scripts" / "python.exe"
+        vpy.parent.mkdir(parents=True)
+        vpy.write_text("")
+        bootstrap.REPO_DIR, bootstrap.APP_DIR = repo, app
+        bootstrap.DEFAULT_CONFIG["engine_dir"] = str(eng)
+        try:
+            old = "C:\\AI\\Multi-Talk\\MultiTalk"
+            moved = dict(bootstrap.DEFAULT_CONFIG, engine_dir=old,
+                         weights_dir=old + "\\weights",
+                         python="C:\\AI\\Multi-Talk\\" + real_app.name
+                                + "\\engine-venv\\Scripts\\python.exe")
+            notes = bootstrap.heal_paths(moved)
+            s.equal("a stale engine path is rebased onto the renamed repo",
+                    moved["engine_dir"], str(eng))
+            s.equal("a stale weights path follows it",
+                    moved["weights_dir"], str(eng / "weights"))
+            s.equal("a moved engine Python is rebased with the venv",
+                    moved["python"], str(vpy))
+            s.check("each repair is reported", len(notes) == 3, str(notes))
+            s.check("a healed config is left alone",
+                    bootstrap.heal_paths(moved) == [])
+            gone = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(eng),
+                        python="E:\\elsewhere\\python312\\python.exe")
+            bootstrap.heal_paths(gone)
+            s.equal("a vanished Python path is cleared, not kept",
+                    gone["python"], "")
+            stale_default = dict(bootstrap.DEFAULT_CONFIG,
+                                 engine_dir="/old/place/whatever/MultiTalk")
+            bootstrap.heal_paths(stale_default)
+            s.equal("a saved default engine path comes back to the repo's",
+                    stale_default["engine_dir"], str(eng))
+        finally:
+            bootstrap.REPO_DIR, bootstrap.APP_DIR = real_repo, real_app
+            bootstrap.DEFAULT_CONFIG["engine_dir"] = real_default
+
+    # -- the start-up search: finds the engine anywhere, prefers the weights -
+    s.check("the real engine checkout is recognised",
+            bootstrap.is_engine_dir(REAL_ENGINE))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        def make(rel: str) -> Path:
+            c = root / rel
+            (c / "wan").mkdir(parents=True)
+            (c / "weights").mkdir()
+            (c / "generate_multitalk.py").write_text("")
+            (c / "wan" / "multitalk.py").write_text("")
+            return c
+        bare = make("a/MultiTalk")
+        rich = make("x/y/z/w/MultiTalk")
+        make("a/MultiTalk/src/inner/MultiTalk")        # never walked into
+        (root / "Windows" / "MultiTalk" / "wan").mkdir(parents=True)
+        (root / "Windows" / "MultiTalk" / "generate_multitalk.py").write_text("")
+        (root / "Windows" / "MultiTalk" / "wan" / "multitalk.py").write_text("")
+        (root / "b" / "half").mkdir(parents=True)       # entry script only
+        (root / "b" / "half" / "generate_multitalk.py").write_text("")
+        found = bootstrap.find_engine_installs([root], max_depth=6, budget=10)
+        s.equal("the search finds every engine, shallowest first",
+                found, [bare, rich])
+        s.equal("the search stops at the depth limit",
+                bootstrap.find_engine_installs([root], max_depth=3, budget=10),
+                [bare])
+        wcfg = dict(bootstrap.DEFAULT_CONFIG)
+        fake_weights(rich / "weights")
+        s.equal("the engine holding the weights is the one chosen",
+                bootstrap.pick_engine(found, wcfg), rich)
+        real_find = bootstrap.find_engine_installs
+        bootstrap.find_engine_installs = lambda: [bare, rich]
+        # the real repo's engine must not answer for the lost one: no
+        # default folder, no repo to rebase onto
+        bootstrap.DEFAULT_CONFIG["engine_dir"] = str(root / "no-default")
+        bootstrap.REPO_DIR = root / "no-repo"
+        bootstrap.APP_DIR = root / "no-repo" / real_app.name
+        try:
+            lost = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(root / "gone"),
+                        weights_dir=str(root / "gone" / "weights"))
+            notes = bootstrap.verify_locations(lost)
+            s.equal("a lost engine is found by the search",
+                    lost["engine_dir"], str(rich))
+            s.equal("and its weights folder with it",
+                    bootstrap.weights_dir(lost), rich / "weights")
+            s.check("the report says both check out",
+                    all("not found" not in ln and "missing" not in ln
+                        for ln in bootstrap.location_report(lost)[:2]),
+                    str(bootstrap.location_report(lost)))
+            quiet = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(root / "gone"))
+            bootstrap.verify_locations(quiet, search=False)
+            s.equal("no search when asked not to",
+                    quiet["engine_dir"], str(root / "gone"))
+        finally:
+            bootstrap.find_engine_installs = real_find
+            bootstrap.DEFAULT_CONFIG["engine_dir"] = real_default
+            bootstrap.REPO_DIR, bootstrap.APP_DIR = real_repo, real_app
+    row = next(i for i in manager.dependencies(
+        dict(bootstrap.DEFAULT_CONFIG, engine_dir="/nowhere/MultiTalk"),
+        searching=True) if i["id"] == "engine")
+    s.check("while searching, the engine row says so and offers nothing",
+            row["state"] == "warn" and "Searching" in row["detail"]
+            and row["action"] is None)
     return s
