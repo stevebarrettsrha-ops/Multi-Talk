@@ -253,12 +253,16 @@ code. Upstream behaviour is unchanged unless a new option is used.
   picks the size bucket by the wanted height / width instead of the
   picture's. The picture is then centre-cropped to it, as for any bucket.
   The studio uses this for the 720 × 360 and 720 × 1280 outputs.
-- **The INT8 model loads once into RAM** (`wan/multitalk.py`). Upstream's
-  `optimum.quanto.requantize` builds the whole DiT empty on the CPU and then
-  copies the 16.5 GB file into it, so loading briefly needed twice the file
-  in RAM. On a 32 GB Windows PC that ran out of memory and the engine died
-  with exit code 3221225477 (an access violation) right after "Loading
-  Quantized LoRA". The loaded tensors now become the model's directly.
+- **The INT8 weights load once into RAM** (`wan/utils/lowmem_load.py`,
+  used by `wan/multitalk.py` and `wan/modules/t5.py`). Windows reserves
+  every allocation against RAM + page file up front, and upstream's loading
+  reserved far more than the files: safetensors' `load_file` maps the file
+  copy-on-write (the whole map counts) and then copies the tensors out, and
+  `optimum.quanto.requantize` builds the model empty in float32 (four times
+  the INT8 file) before loading into it. On a 32 GB PC that stopped a render
+  at "Loading the model into RAM" with exit code 3221225477 or "The paging
+  file is too small (os error 1455)". Now each tensor is read straight from
+  the file into its own buffer, and those buffers become the model's.
 - **Encode and decode are announced.** `[clip] encoding…` and
   `[clip] decoding…` lines let the job card say "reading the picture" and
   "decoding the frames" instead of sitting on the last step.

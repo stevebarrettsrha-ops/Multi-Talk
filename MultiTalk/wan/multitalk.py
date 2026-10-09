@@ -31,6 +31,7 @@ from .utils.multitalk_utils import MomentumBuffer, adaptive_projected_guidance, 
 from src.vram_management import AutoWrappedQLinear, AutoWrappedLinear, AutoWrappedModule, enable_vram_management
 from wan.utils.utils import load_torch_file, standardize_lora_key_format, load_lora_for_models, apply_lora
 from wan.wan_lora import WanLoraWrapper
+from wan.utils.lowmem_load import load_safetensors, requantize_in_place
 
 from safetensors.torch import load_file
 from optimum.quanto import quantize, freeze, qint8,requantize
@@ -48,43 +49,6 @@ def to_param_dtype_fp32only(model, param_dtype):
         for name, buf in module.named_buffers(recurse=False):
             if buf.dtype == torch.float32:
                 module._buffers[name] = buf.to(param_dtype)
-def requantize_in_place(model, state_dict, quantization_map, param_dtype):
-    """optimum-quanto's requantize() without its second copy (MultiTalk Studio).
-
-    Upstream's requantize allocates the whole DiT empty on the CPU and then
-    copies the 16.5 GB state dict into it, so loading peaks at twice the file
-    in RAM. On a 32 GB Windows PC that exhausts the commit limit and the
-    engine dies with 0xC0000005 right after "Loading Quantized LoRA". Here
-    the state dict's own tensors become the model's (assign=True), so the
-    file is held once. Anything the file does not carry is materialised empty
-    on the CPU, as upstream does.
-    """
-    from optimum.quanto.quantize import _quantize_submodule
-
-    for name, m in model.named_modules():
-        qconfig = quantization_map.get(name)
-        if qconfig is not None:
-            weights = None if qconfig["weights"] == "none" else qconfig["weights"]
-            activations = (None if qconfig["activations"] == "none"
-                           else qconfig["activations"])
-            _quantize_submodule(model, name, m, weights=weights,
-                                activations=activations)
-    model.load_state_dict(state_dict, strict=False, assign=True)
-    for m in model.modules():
-        for name, param in list(m.named_parameters(recurse=False)):
-            t = param.data
-            if t.device.type == "meta":
-                t = torch.empty_like(t, device="cpu")
-            if (type(t) is torch.Tensor and t.is_floating_point()
-                    and t.dtype != param_dtype):
-                t = t.to(param_dtype)
-            if t is not param.data:
-                setattr(m, name, torch.nn.Parameter(t, requires_grad=False))
-        for name, buf in list(m.named_buffers(recurse=False)):
-            if buf is not None and buf.device.type == "meta":
-                m._buffers[name] = torch.empty_like(buf, device="cpu")
-
-
 def resize_and_centercrop(cond_image, target_size):
         """
         Resize image or tensor to the target size without padding.
@@ -230,16 +194,16 @@ class MultiTalkPipeline:
             # load quantized model
             if lora_dir is not None:
                 logging.info(f"Loading Quantized LoRA from {lora_dir[0]}")
-                model_state_dict = load_file(lora_dir[0])
+                model_state_dict = load_safetensors(lora_dir[0])
                 map_json_path = os.path.join(os.path.dirname(lora_dir[0]),f"quantization_map_{quant}_FusionX.json")
             else:
-                model_state_dict = load_file(os.path.join(quant_dir,"quant_models", f"dit_model_{quant}.safetensors"))
+                model_state_dict = load_safetensors(os.path.join(quant_dir,"quant_models", f"dit_model_{quant}.safetensors"))
                 map_json_path = os.path.join(quant_dir,"quant_models", f"dit_model_map_{quant}.json")
             self.model.init_freqs()
             with open(map_json_path, "r") as f:
                 quantization_map = json.load(f)
-            requantize_in_place(self.model, model_state_dict, quantization_map,
-                                self.param_dtype)
+            # without upstream's second copy of the model (MultiTalk Studio)
+            requantize_in_place(self.model, model_state_dict, quantization_map)
             del model_state_dict
             gc.collect()
         else:

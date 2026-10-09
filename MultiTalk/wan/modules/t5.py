@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from safetensors.torch import load_file
+from ..utils.lowmem_load import load_safetensors, requantize_in_place
 from optimum.quanto import quantize, freeze, qint8,requantize
 
 from .tokenizers import HuggingfaceTokenizer
@@ -508,10 +509,13 @@ class T5EncoderModel:
                     dtype=dtype,
                     device=torch.device('meta'))
             logging.info(f'Loading quantized T5 from {os.path.join(quant_dir, "quant_models", f"t5_{quant}.safetensors")}')
-            model_state_dict = load_file(os.path.join(quant_dir, "quant_models", f"t5_{quant}.safetensors"))
+            # read without a memory map and loaded without a second copy of
+            # the model: Windows commits both (MultiTalk Studio)
+            model_state_dict = load_safetensors(os.path.join(quant_dir, "quant_models", f"t5_{quant}.safetensors"))
             with open(os.path.join(quant_dir, "quant_models", f"t5_map_{quant}.json"), "r") as f:
                 quantization_map = json.load(f)
-            requantize(model, model_state_dict, quantization_map, device='cpu')
+            requantize_in_place(model, model_state_dict, quantization_map)
+            del model_state_dict
         else:
             model = umt5_xxl(
                 encoder_only=True,

@@ -228,6 +228,11 @@ def run(slow: bool = False) -> Suite:
     s.check("a Windows access violation is named as RAM / page file",
             "page file" in engine.failure(av, 3221225477)
             and "page file" in engine.failure(av, -1073741819))
+    pf = engine.new_state()
+    engine.read_line(pf, "OSError: The paging file is too small for this "
+                         "operation to complete. (os error 1455)")
+    s.check("os error 1455 is named as the page file, with what to set",
+            "System managed" in engine.failure(pf, 1))
 
     # -- preflight -----------------------------------------------------------
     peak = bootstrap.peak_ram(cfg)
