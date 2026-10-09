@@ -367,6 +367,15 @@ def failure(state: dict, code: int) -> str:
                 "and the text encoder on the CPU, and close anything else "
                 "using the GPU.")
     text = "\n".join(state["tail"])
+    # 0xC0000005, Windows' access violation: a native crash with no Python
+    # traceback. Seen while the 16.5 GB INT8 weights load into RAM. os error
+    # 1455 is the same shortage reported properly.
+    if (code in (3221225477, -1073741819) or "os error 1455" in text
+            or "paging file is too small" in text):
+        return ("Windows ran out of memory loading the model: RAM plus the "
+                "page file is too small. Set the page file to System managed "
+                "(or 40 GB+) on a drive with that much free space, restart, "
+                "close other programs, then try again.")
     if "Torch not compiled with CUDA enabled" in text:
         return ("PyTorch in the engine environment is the CPU build. On the "
                 "Engine page press Reinstall next to PyTorch to get the CUDA "

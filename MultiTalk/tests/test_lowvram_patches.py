@@ -152,6 +152,68 @@ check("the small buckets keep each key's shape (h/w within 10%)",
           for big in [mu.ASPECT_RATIO_627[key]]))
 check("ffmpeg_exe finds something to run", bool(mu.ffmpeg_exe()))
 
+# ------------------------------------------------- INT8 weight loading ----
+import tempfile
+from safetensors.torch import save_file, load_file
+from optimum.quanto import freeze, qint8, quantize, quantization_map, requantize
+
+lm = load("lm", "wan/utils/lowmem_load.py")
+tmp = Path(tempfile.mkdtemp())
+sd = {"f32": torch.randn(3, 5), "bf16": torch.randn(7, 2).bfloat16(),
+      "i8": torch.randint(-128, 127, (9, 3), dtype=torch.int8),
+      "scalar": torch.tensor(2.5), "empty": torch.zeros(0, 4)}
+save_file(sd, tmp / "a.safetensors", metadata={"format": "pt"})
+ref = load_file(tmp / "a.safetensors")
+for mapped in (False, True):
+    got = lm.load_safetensors(tmp / "a.safetensors", mapped=mapped)
+    check(f"the reader (mapped={mapped}) gives what safetensors' load_file gives",
+          ref.keys() == got.keys() and all(
+              ref[k].dtype == got[k].dtype and ref[k].shape == got[k].shape
+              and torch.equal(ref[k].reshape(-1).view(torch.uint8),
+                              got[k].reshape(-1).view(torch.uint8)) for k in ref))
+(tmp / "cut.safetensors").write_bytes((tmp / "a.safetensors").read_bytes()[:-8])
+for mapped in (False, True):
+    try:
+        lm.load_safetensors(tmp / "cut.safetensors", mapped=mapped)
+        check(f"a truncated file is reported (mapped={mapped})", False)
+    except OSError as e:
+        check(f"a truncated file is reported (mapped={mapped})", "truncated" in str(e))
+
+
+class Tiny(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.a = torch.nn.Linear(64, 128)
+        self.n = torch.nn.LayerNorm(128)
+        self.b = torch.nn.Linear(128, 32)
+
+    def forward(self, x):
+        return self.b(self.n(self.a(x)))
+
+
+q = Tiny().to(torch.bfloat16)
+quantize(q, weights=qint8)
+freeze(q)
+save_file(q.state_dict(), tmp / "q.safetensors")
+qmap = quantization_map(q)
+x = torch.randn(5, 64, dtype=torch.bfloat16)
+for meta_dtype in (torch.float32, torch.bfloat16):  # the DiT's, the T5's
+    with torch.device("meta"):
+        up = Tiny().to(meta_dtype)
+        mine = Tiny().to(meta_dtype)
+    requantize(up, load_file(tmp / "q.safetensors"), qmap, device="cpu")
+    lm.requantize_in_place(mine, lm.load_safetensors(tmp / "q.safetensors",
+                                                     mapped=True), qmap)
+    same = all(n1 == n2 and p1.dtype == p2.dtype and type(p1.data) is type(p2.data)
+               and p2.device.type == "cpu"
+               for (n1, p1), (n2, p2) in zip(up.named_parameters(),
+                                             mine.named_parameters()))
+    w = mine.a.weight.data
+    check(f"the {meta_dtype} model's int8 weights stay the file's mapped pages",
+          w._data.untyped_storage().nbytes() > w._data.numel())
+    check(f"requantize_in_place matches requantize ({meta_dtype} model)",
+          same and torch.equal(up.bfloat16()(x), mine.bfloat16()(x)))
+
 print()
 print("FAILED: " + ", ".join(failures) if failures else "all passed")
 sys.exit(1 if failures else 0)

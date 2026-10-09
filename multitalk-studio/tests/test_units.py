@@ -224,6 +224,15 @@ def run(slow: bool = False) -> Suite:
     engine.read_line(drv, "RuntimeError: Found no NVIDIA driver on your system.")
     s.check("a missing driver is named as the driver",
             "driver" in engine.failure(drv, 1))
+    av = engine.new_state()
+    s.check("a Windows access violation is named as RAM / page file",
+            "page file" in engine.failure(av, 3221225477)
+            and "page file" in engine.failure(av, -1073741819))
+    pf = engine.new_state()
+    engine.read_line(pf, "OSError: The paging file is too small for this "
+                         "operation to complete. (os error 1455)")
+    s.check("os error 1455 is named as the page file, with what to set",
+            "System managed" in engine.failure(pf, 1))
 
     # -- preflight -----------------------------------------------------------
     peak = bootstrap.peak_ram(cfg)
