@@ -203,7 +203,7 @@ class MultiTalkPipeline:
             with open(map_json_path, "r") as f:
                 quantization_map = json.load(f)
             # mapped read-only, without upstream's second copy of the model:
-            # runs with 8 GB of RAM (MultiTalk Studio, wan/utils/lowmem_load.py)
+            # reduces host-RAM peaks (MultiTalk Studio, wan/utils/lowmem_load.py)
             requantize_in_place(self.model, model_state_dict, quantization_map)
             del model_state_dict
             gc.collect()
@@ -561,6 +561,9 @@ class MultiTalkPipeline:
                 padding_frames_pixels_values = torch.concat([cond_image, video_frames], dim=2)
                 logging.info("[clip] encoding the reference frames")
                 y = self.vae.encode(padding_frames_pixels_values) 
+                # MultiTalk Studio: these full float32 pixel buffers are no
+                # longer needed. empty_cache cannot free live tensors.
+                del padding_frames_pixels_values, video_frames
                 y = torch.stack(y).to(self.param_dtype) # B C T H W
                 cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num-1) // 4)
                 latent_motion_frames = y[:, :, :cur_motion_frames_latent_num][0] # C T H W
@@ -757,13 +760,37 @@ class MultiTalkPipeline:
 
                     x0 = [latent.to(self.device)] 
                     del latent_model_input, timestep
+
+                # MultiTalk Studio: these tensors belonged to sampling, but
+                # Python otherwise retains them through decode and the next
+                # clip's reference encode. empty_cache cannot release them.
+                del arg_c, arg_null_text, arg_null_audio, arg_null
+                del audio_embs, audio_emb, clip_context, y, msk, ref_target_masks
+                del noise_pred_cond, noise_pred, dt, latent_motion_frames
+                if math.isclose(text_guide_scale, 1.0):
+                    del noise_pred_drop_audio
+                else:
+                    del noise_pred_drop_text, noise_pred_uncond
+                if extra_args.use_apg:
+                    del audio_momentumbuffer, text_momentumbuffer, diff_uncond_audio
+                    if not math.isclose(text_guide_scale, 1.0):
+                        del diff_uncond_text
+                if not is_first_clip:
+                    del motion_add_noise, add_latent
+                self.model.clear_teacache()
                 
                 if offload_model: 
-                    if not self.vram_management:
+                    if self.vram_management:
+                        self.load_models_to_device([])
+                    else:
                         self.model.cpu()
                 torch_gc()
 
                 logging.info("[clip] decoding the frames")
+                # MultiTalk Studio: keep the tiled output canvas off CUDA;
+                # the continuation explicitly copies only its motion frames
+                # back to the device below.
+                self.vae.model.decode_output_device = "cpu" if offload_model else None
                 videos = self.vae.decode(x0) 
             
             # cache generated samples

@@ -17,7 +17,8 @@ bar.
 ## Read this before you download 29 GB
 
 MultiTalk is a 14-billion-parameter video model. In bf16 it wants about 30
-GB of VRAM. This app runs it on an **RTX 4060 (8 GB)** by:
+GB of VRAM. This app targets an **8 GB GPU** with the following reductions;
+these are not proof that a full model render fits every 8 GB installation:
 
 - **Using MeiGen's INT8 build.** The DiT and the text encoder are about half
   their bf16 size.
@@ -47,9 +48,10 @@ ones before it starts.
 **System RAM matters as much as VRAM.** The GPU borrows the INT8 model and
 text encoder a layer at a time, so a render wants around 29 GB of RAM to
 keep them all cached. The engine maps both from their files read-only, so
-less RAM still runs (8 GB included) and needs no big page file. Whatever
-does not fit is read from the disk again on every step, so keep the weights
-on an SSD, and expect it to be many times slower than with 32 GB.
+memory mapping reduces duplicate allocations, but activations, decoded
+frames and other models still consume RAM. **32 GB system RAM is the
+practical starting point; 8 GB system RAM is not a supported promise.**
+Keep weights on an SSD. Memory pressure can cause heavy paging or failure.
 
 **Expect minutes per clip, not seconds.** The model renders in 3.2 second
 clips: 81 frames at 25 fps. Longer speech is a chain of clips, each adding
@@ -197,7 +199,9 @@ python tests/run.py gate       # compile, script parse, ids, wiring
   when Playwright is missing.
 
 The engine patches have their own CPU test: `python
-../MultiTalk/tests/test_lowvram_patches.py`. It needs torch.
+../MultiTalk/tests/test_lowvram_patches.py`. It needs torch. Run
+`python ../MultiTalk/tests/test_pipeline_lifecycle.py` as well to check
+sampling cleanup and offloading at the decode boundary.
 
 **`tests/tiny_engine/`** runs the real MultiTalk code end to end on a CPU,
 with tiny random weights instead of the 29 GB set:
@@ -223,10 +227,17 @@ RTX 4060 is the remaining check.
 ## What changed in the engine
 
 All changes are in `../MultiTalk` and are marked `MultiTalk Studio` in the
-code. Upstream behaviour is unchanged unless a new option is used.
+code. The memory changes also apply to existing offloading options.
 
 - **Tiled VAE** (`wan/modules/vae.py`). Spatial tiles with linear blending
   on encode and decode, via `--vae_tile` and `--vae_tile_overlap`.
+- **Host accumulation for tiled decode.** With offloading enabled, each
+  decoded tile is copied to CPU before blending. The full pixel canvas and
+  its normalization no longer need CUDA storage. Reference padding buffers
+  are released before sampling, and wav2vec2 is released before model loading.
+- **Release sampling memory before decode.** Persistent DiT wrappers now
+  offload before the VAE runs. Per-clip conditioning, guidance and TeaCache
+  tensors are released at the same boundary, including on streaming clips.
 - **Smaller sizes** (`wan/configs/__init__.py`,
   `wan/utils/multitalk_utils.py`). `multitalk-360` (480 px) and
   `multitalk-240` (320 px) buckets, scaled from the 640 px table.
@@ -266,7 +277,8 @@ code. Upstream behaviour is unchanged unless a new option is used.
   file is too small (os error 1455)". Now the files are mapped read-only:
   the tensors are the file's own pages, which count against neither RAM nor
   the page file, and Windows re-reads them from disk when RAM is short. That
-  also lets a PC with 8 GB of RAM run it, slowly.
+  reduces host-memory pressure; it does not establish that an 8 GB RAM PC can
+  finish a real render.
 - **Encode and decode are announced.** `[clip] encoding…` and
   `[clip] decoding…` lines let the job card say "reading the picture" and
   "decoding the frames" instead of sitting on the last step.

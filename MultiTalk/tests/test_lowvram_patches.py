@@ -73,6 +73,16 @@ with torch.no_grad():
 check("a tile larger than the picture is the plain decode exactly",
       torch.equal(big, plain))
 
+# MultiTalk Studio: the host accumulation path must preserve the same blend.
+with torch.no_grad():
+    model.tile_size, model.tile_overlap = 16, 6
+    normal = model.decode(z, scale)
+    model.decode_output_device = "cpu"
+    host = model.decode(z, scale)
+    model.decode_output_device = None
+check("host accumulation preserves tiled pixel values", torch.equal(normal, host))
+check("the offloaded tiled canvas is in host memory", host.device.type == "cpu")
+
 ones = vae_mod.WanVAE_._ramp_mask(10, 12, 3, 3, True, True, True, True,
                                   "cpu", torch.float32)
 check("blend ramps never reach zero", ones.min().item() > 0)
