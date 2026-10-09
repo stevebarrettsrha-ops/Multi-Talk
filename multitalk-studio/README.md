@@ -87,6 +87,30 @@ The first launch opens the setup sheet. It runs these steps:
 Each step shows live progress. A failed or cancelled download keeps what
 arrived and resumes next time.
 
+Already downloaded the models? Set **Settings → weights folder** to the
+folder containing `Wan2.1-I2V-14B-480P`, `MeiGen-MultiTalk`,
+`chinese-wav2vec2-base` and, if used, `Kokoro-82M`. Rendering passes those
+locations to the engine. Existing finished files are kept. Setup and
+**Download set** also reuse matching Hugging Face cache snapshots before
+contacting the Hub, including wav2vec's specific `refs/pr/1` revision.
+`HF_HUB_CACHE`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TRANSFORMERS_CACHE`
+and the standard `~/.cache/huggingface/hub` layout are supported. Same-drive
+reuse uses hard links; copying across drives needs additional disk space.
+No cache originals are removed or overwritten.
+
+A tokenizer folder must contain its config and vocabulary. Empty files,
+unfinished `.part`/`.incomplete` downloads and Git LFS pointer stubs do not
+count as ready. Known byte counts are checked when files are adopted from a
+listed download; large cached weights below half their published estimate
+are rejected. These checks do not certify model contents: **Test the engine**
+is still needed to validate a complete real render.
+
+The last verified paths are saved and reused. If a location stops working,
+the app tries recovery once for that changed state and remembers an
+unsuccessful drive search across restarts. Normal polling and package
+refreshes do not repeat the search. **Engine → Recheck** explicitly allows
+another recovery attempt; changing a path also permits a new check.
+
 flash-attn and xfuser are **not** installed. flash-attn has no Windows
 wheels and xfuser is only for multi-GPU runs. The engine falls back to
 PyTorch's own fused attention without them.

@@ -1138,15 +1138,15 @@ async function loadPreflight() {
 
 /* ========================= engine page ========================= */
 var depsBusy = null;
-function loadDeps(fresh) {
-  if (!depsBusy) depsBusy = fetchDeps(fresh).finally(function () { depsBusy = null; });
+function loadDeps(fresh, relocate) {
+  if (!depsBusy) depsBusy = fetchDeps(fresh, relocate).finally(function () { depsBusy = null; });
   return depsBusy;
 }
-async function fetchDeps(fresh) {
+async function fetchDeps(fresh, relocate) {
   var box = $("depList"), btn = $("btnRecheck");
   btn.disabled = true; btn.textContent = "Checking…";
   try {
-    var d = await api("/api/deps" + (fresh ? "?fresh=1" : ""));
+    var d = await api("/api/deps" + (relocate ? "?fresh=1&relocate=1" : fresh ? "?fresh=1" : ""));
     $("torchIndex").value = d.torch_index || "";
     box.innerHTML = "";
     var bad = 0;
@@ -1713,7 +1713,7 @@ function wire() {
   $("lbDelete").addEventListener("click", function () {
     if (S.lightbox) removeClip(S.lightbox); });
 
-  $("btnRecheck").addEventListener("click", function () { loadDeps(true); refreshStatus(); });
+  $("btnRecheck").addEventListener("click", function () { loadDeps(true, true); refreshStatus(); });
   $("btnInstallAll").addEventListener("click", installAllMissing);
   $("btnReRun").addEventListener("click", openSetup);
   $("btnPreflight").addEventListener("click", loadPreflight);

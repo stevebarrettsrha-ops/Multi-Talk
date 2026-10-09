@@ -195,7 +195,7 @@ def model_set(cfg: dict) -> list[dict]:
 
     An item with "prefix" stands for a whole folder of the repo (the two
     tokenizers and the Kokoro voices): it is listed at download time and
-    counts as present once its folder holds finished files.
+    counts as present once its tokenizer assets (or voice files) are present.
     """
     p = PRECISIONS.get(cfg.get("precision") or "", PRECISIONS["int8-fusionx"])
 
@@ -262,15 +262,45 @@ def model_path(wdir: Path, item: dict) -> Path:
     return wdir / item["root"] / item["path"]
 
 
+def finished_file(path: Path, expected_size: int = 0) -> bool:
+    """Reject empty files, partial downloads and Git LFS pointer stubs.
+
+    This is a quick presence check, not a checksum or a model-load test.
+    An exact byte count is enforced only when supplied by a remote file list.
+    """
+    try:
+        if not path.is_file() or path.suffix in (".part", ".incomplete"):
+            return False
+        if path.resolve().suffix in (".part", ".incomplete"):
+            return False
+        size = path.stat().st_size
+        if size <= 0 or (expected_size and size != expected_size):
+            return False
+        with path.open("rb") as fh:
+            return not fh.read(64).startswith(b"version https://git-lfs.github.com/spec/")
+    except OSError:
+        return False
+
+
+def folder_present(target: Path, prefix: str) -> bool:
+    """The assets AutoTokenizer needs, rather than an arbitrary README."""
+    if prefix in ("google/umt5-xxl/", "xlm-roberta-large/"):
+        vocab = ("tokenizer.json", "spiece.model", "sentencepiece.bpe.model")
+        return (finished_file(target / "tokenizer_config.json")
+                and any(finished_file(target / name) for name in vocab))
+    if prefix == "voices/":
+        return any(finished_file(f) for f in target.glob("*.pt"))
+    try:
+        return any(finished_file(f) for f in target.rglob("*"))
+    except OSError:
+        return False
+
+
 def present(wdir: Path, item: dict) -> bool:
     target = model_path(wdir, item)
     if item.get("prefix"):
-        try:
-            files = [f for f in target.rglob("*") if f.is_file()]
-        except OSError:
-            return False
-        return bool(files) and not any(f.suffix == ".part" for f in files)
-    return target.is_file()
+        return folder_present(target, item["path"])
+    return finished_file(target)
 
 
 def missing_models(wdir: Path, cfg: dict, required_only: bool = True) -> list[dict]:
@@ -835,21 +865,44 @@ def pick_engine(installs: list[Path], cfg: dict) -> Path | None:
     return min(installs, key=score) if installs else None
 
 
-def verify_locations(cfg: dict, search: bool = True, log=None) -> list[str]:
-    """Check every saved location; repair what moved.
+def location_key(cfg: dict) -> list:
+    """Cheap path health only; no tree or drive traversal."""
+    py = cfg.get("python") or ""
+    return [str(REPO_DIR), str(engine_dir(cfg)), has_engine(engine_dir(cfg)),
+            str(weights_dir(cfg)), weights_dir(cfg).is_dir(), py,
+            bool(py and Path(py).is_file())]
 
-    The quick repair (heal_paths) handles a moved repo folder. When the
-    engine is still nowhere, and `search` is on, the drives are searched.
+
+def needs_location_search(cfg: dict) -> bool:
+    return (not has_engine(engine_dir(cfg))
+            and cfg.get("_location_search_attempt") != location_key(cfg))
+
+
+def verify_locations(cfg: dict, search: bool = True, log=None,
+                     force: bool = False) -> list[str]:
+    """Reuse verified locations, with one recovery attempt per failed state.
+
+    Both successful checks and unsuccessful searches are persisted in config.
+    A path change/failure permits a fresh attempt; only an explicit Recheck
+    bypasses the remembered result when the same paths remain unavailable.
     """
     say = log or (lambda _m: None)
-    notes = heal_paths(cfg)
-    if has_engine(engine_dir(cfg)) or not search:
+    notes = []
+    key = location_key(cfg)
+    if force or cfg.get("_location_check") != key:
+        notes = heal_paths(cfg)
+        cfg["_location_check"] = location_key(cfg)
+    if has_engine(engine_dir(cfg)):
+        cfg.pop("_location_search_attempt", None)
         return notes
+    if not search or (not force and not needs_location_search(cfg)):
+        return notes
+    cfg["_location_search_attempt"] = location_key(cfg)
     say("Searching this computer for the MultiTalk engine…")
     hit = pick_engine(find_engine_installs(), cfg)
     if not hit:
         say("No MultiTalk engine found on this computer — set its folder "
-            "in Settings.")
+            "in Settings or use Recheck to search again.")
         return notes
     cfg["engine_dir"] = str(hit)
     notes.append(f"MultiTalk engine found at {hit}")
@@ -857,6 +910,8 @@ def verify_locations(cfg: dict, search: bool = True, log=None) -> list[str]:
     if w and not Path(w).is_dir() and (hit / "weights").is_dir():
         cfg["weights_dir"] = ""
         notes.append(f"Weights folder found at {hit / 'weights'}")
+    cfg["_location_check"] = location_key(cfg)
+    cfg.pop("_location_search_attempt", None)
     return notes
 
 
@@ -995,6 +1050,122 @@ def hf_tree(cfg: dict, repo: str, revision: str = "main") -> list[dict]:
     return files
 
 
+def hf_cache_roots() -> list[Path]:
+    """Use the same cache locations as huggingface_hub, without importing it."""
+    home = Path(os.environ.get("HF_HOME") or
+                Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+                / "huggingface").expanduser()
+    roots = [Path(os.environ[key]).expanduser() for key in
+             ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE")
+             if os.environ.get(key)]
+    roots.append(home / "hub")
+    return list(dict.fromkeys(roots))
+
+
+def cached_snapshots(repo: str, revision: str = "main") -> list[Path]:
+    """Only the requested repo and ref; never guess another model/revision."""
+    if any(p in ("", ".", "..") for p in repo.split("/")):
+        return []
+    if any(p in ("", ".", "..") for p in revision.split("/")):
+        return []
+    out = []
+    for root in hf_cache_roots():
+        base = root / ("models--" + repo.replace("/", "--"))
+        try:
+            commit = revision
+            if not re.fullmatch(r"[0-9a-f]{40}", commit):
+                commit = (base / "refs" / revision).read_text().strip()
+            if not re.fullmatch(r"[0-9a-f]{40}", commit):
+                continue
+            snapshot = base / "snapshots" / commit
+            if snapshot.is_dir():
+                out.append(snapshot)
+        except (OSError, UnicodeError):
+            continue
+    return out
+
+
+def cached_file(repo: str, path: str, revision: str = "main",
+                expected_size: int = 0) -> Path | None:
+    if Path(path).is_absolute() or "\\" in path or ".." in path.split("/"):
+        return None
+    for snapshot in cached_snapshots(repo, revision):
+        source = snapshot / path
+        if finished_file(source, expected_size):
+            if not expected_size:
+                estimates = [m["size"] for precision in PRECISIONS
+                             for m in model_set({"precision": precision})
+                             if m["repo"] == repo and m["path"] == path]
+                if estimates and max(estimates) >= 1_000_000 and \
+                        source.stat().st_size < max(estimates) // 2:
+                    continue
+            return source
+    return None
+
+
+def cached_items(item: dict) -> list[dict] | None:
+    """Expand a usable cached item without a Hub request.
+
+    A snapshot can itself be partial: tokenizer folders must have their config
+    and vocabulary. Large weights below half the published estimate are not
+    adopted as complete. These quick checks do not validate model contents.
+    """
+    for snapshot in cached_snapshots(item["repo"], item.get("revision", "main")):
+        source = snapshot / item["path"]
+        if item.get("prefix"):
+            if not folder_present(source, item["path"]):
+                continue
+            files = [f for f in source.rglob("*") if finished_file(f)]
+        elif finished_file(source):
+            estimate = item.get("size", 0)
+            if estimate >= 1_000_000 and source.stat().st_size < estimate // 2:
+                continue
+            files = [source]
+        else:
+            continue
+        return [{**item, "path": f.relative_to(snapshot).as_posix(),
+                 "name": f.name, "prefix": False, "size": f.stat().st_size,
+                 "approx": False, "known_size": f.stat().st_size}
+                for f in files]
+    return None
+
+
+def reuse_cache(source: Path, dest: Path, on_progress=None,
+                should_cancel=None) -> bool:
+    """Adopt immutable cached bytes; retain the original and any .part file.
+
+    A hard link saves space on the same drive. Different drives use an atomic,
+    cancellable copy. Neither path opens the cache file for writing.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temp = dest.with_name(dest.name + f".{threading.get_ident()}.reuse")
+    size = source.stat().st_size
+    try:
+        if should_cancel and should_cancel():
+            return False
+        try:
+            os.link(source.resolve(), temp)
+        except OSError:
+            got, started = 0, time.monotonic()
+            with source.open("rb") as src, temp.open("wb") as dst:
+                while chunk := src.read(1024 * 1024):
+                    if should_cancel and should_cancel():
+                        return False
+                    dst.write(chunk)
+                    got += len(chunk)
+                    if on_progress:
+                        speed = got / max(time.monotonic() - started, .001)
+                        on_progress(got, size, speed, (size - got) / speed)
+        if should_cancel and should_cancel():
+            return False
+        temp.replace(dest)
+        if on_progress:
+            on_progress(size, size, 0, 0)
+        return True
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 # one writer per .part — setup and the Models page could both append
 _writing: set[Path] = set()
 _writing_lock = threading.Lock()
@@ -1002,14 +1173,26 @@ _writing_lock = threading.Lock()
 
 def download_file(cfg: dict, repo: str, path: str, dest: Path,
                   on_progress=None, should_cancel=None,
-                  revision: str = "main") -> None:
+                  revision: str = "main", expected_size: int = 0) -> None:
     with _writing_lock:
         if dest in _writing:
             raise RuntimeError(f"{dest.name} is already downloading.")
         _writing.add(dest)
     try:
+        if finished_file(dest, expected_size):
+            if on_progress:
+                on_progress(dest.stat().st_size, dest.stat().st_size, 0, 0)
+            return
+        source = cached_file(repo, path, revision, expected_size)
+        if source is not None:
+            reuse_cache(source, dest, on_progress, should_cancel)
+            return
         _download_file(cfg, repo, path, dest, on_progress, should_cancel,
                        revision)
+        if not (should_cancel and should_cancel()) and \
+                not finished_file(dest, expected_size):
+            raise RuntimeError(f"{dest.name} does not match the expected file "
+                               "size or is an unfinished Git LFS download.")
     finally:
         with _writing_lock:
             _writing.discard(dest)
@@ -1084,6 +1267,12 @@ def expand(cfg: dict, items: list[dict], log=None) -> list[dict]:
     trees: dict[tuple[str, str], list[dict] | None] = {}
     out: list[dict] = []
     for item in items:
+        cached = cached_items(item)
+        if cached is not None:
+            out.extend(cached)
+            if log:
+                log(f"Using Hugging Face cache: {item['repo']}/{item['path']}")
+            continue
         key = (item["repo"], item["revision"])
         if key not in trees:
             try:
@@ -1102,12 +1291,14 @@ def expand(cfg: dict, items: list[dict], log=None) -> list[dict]:
                 if f["path"].startswith(item["path"]):
                     out.append({**item, "path": f["path"], "size": f["size"],
                                 "prefix": False, "approx": False,
+                                "known_size": f["size"],
                                 "name": f["path"].rsplit("/", 1)[-1]})
             continue
         size = next((f["size"] for f in tree or [] if f["path"] == item["path"]),
                     None)
         out.append({**item, "size": size if size is not None else item["size"],
-                    "approx": size is None and item.get("approx", False)})
+                    "approx": size is None and item.get("approx", False),
+                    "known_size": size or 0})
     return out
 
 
@@ -1328,7 +1519,7 @@ def run_setup(cfg: dict, prog: Progress) -> None:
                 prog.log("Preflight: " + note)
             prog.track("models", None, "Asking HuggingFace for the file list…")
             plan = [f for f in expand(cfg, todo, prog.log)
-                    if not model_path(wdir, f).is_file()]
+                    if not finished_file(model_path(wdir, f), f.get("known_size", 0))]
             grand = sum(f["size"] for f in plan)
             prog.log(f"{len(plan)} file(s) to download, ~{fmt_size(grand)}")
             done_bytes = 0
@@ -1345,7 +1536,8 @@ def run_setup(cfg: dict, prog: Progress) -> None:
                            f"{head} — starting…")
                 try:
                     download_file(cfg, f["repo"], f["path"], dest, on_prog,
-                                  revision=f["revision"])
+                                  revision=f["revision"],
+                                  expected_size=f.get("known_size", 0))
                 except Exception as exc:  # noqa: BLE001
                     if f["role"] != "optional":
                         raise

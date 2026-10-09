@@ -105,8 +105,11 @@ after engine changes, with `make_weights.py` for the weights folder.
 The config keeps absolute paths (`engine_dir` — even the default is saved
 absolute — `weights_dir`, `python`), which go stale the moment the repo is
 moved, renamed or re-extracted, and then everything reads "missing" though it
-is all on disk. `bootstrap.verify_locations()` runs at import (quick), in the
-boot thread at every start, and on every Recheck (`/api/deps`):
+is all on disk. `bootstrap.verify_locations()` reuses persisted successful checks and failed
+search attempts. Import, boot and `/api/deps` perform cheap path-health checks;
+a changed/missing path gets one recovery attempt, while only the explicit
+Recheck button (`/api/deps?fresh=1&relocate=1`) forces another attempt for an
+unchanged failure. `fresh=1` by itself is a package refresh, not relocation.
 `heal_paths()` grafts a stale path's tail onto the repo's current folder
 (`rebase_path`, longest tail first, so a renamed root works) and clears an
 engine Python that is gone. If the engine is still nowhere,

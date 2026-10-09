@@ -300,7 +300,8 @@ def download_item(cfg: dict, item: dict) -> Task:
                      detail=bootstrap.fmt_transfer(got, total, speed, eta))
 
         bootstrap.download_file(cfg, item["repo"], item["path"], dest, on_prog,
-                                lambda: task.cancel, item.get("revision", "main"))
+                                lambda: task.cancel, item.get("revision", "main"),
+                                expected_size=item.get("known_size", 0))
         if task.cancel:
             task.set(state="cancelled",
                      detail="Cancelled — the part that downloaded is kept, and "
@@ -323,7 +324,8 @@ def download_set(cfg: dict) -> list[Task]:
     if not todo:
         return []
     files = [f for f in bootstrap.expand(cfg, todo)
-             if not bootstrap.model_path(wdir, f).is_file()]
+             if not bootstrap.finished_file(bootstrap.model_path(wdir, f),
+                                            f.get("known_size", 0))]
     busy = {t.meta.get("dest") for t in TASKS.running("download")}
     return [download_item(cfg, f) for f in files
             if str(bootstrap.model_path(wdir, f)) not in busy]

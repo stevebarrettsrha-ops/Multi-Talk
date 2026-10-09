@@ -373,7 +373,8 @@ def run(slow: bool = False) -> Suite:
             t = bootstrap.model_path(w, item)
             if item["prefix"]:
                 t.mkdir(parents=True, exist_ok=True)
-                (t / "x.json").write_text("{}")
+                (t / "tokenizer_config.json").write_text("{}")
+                (t / "tokenizer.json").write_text("{}")
             else:
                 t.parent.mkdir(parents=True, exist_ok=True)
                 t.write_bytes(b"placeholder")
@@ -414,7 +415,11 @@ def run(slow: bool = False) -> Suite:
         s.check("a folder still downloading is not present",
                 not bootstrap.present(w, folder))
         (target / "a.json.part").rename(target / "a.json")
-        s.check("a finished folder is present", bootstrap.present(w, folder))
+        s.check("a random JSON file is not a complete tokenizer",
+                not bootstrap.present(w, folder))
+        (target / "tokenizer_config.json").write_text("{}")
+        (target / "tokenizer.json").write_text("{}")
+        s.check("a finished tokenizer folder is present", bootstrap.present(w, folder))
 
         # path safety
         wcfg = dict(cfg, weights_dir=str(w))

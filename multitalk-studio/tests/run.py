@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 MODULES = [
     ("gate", "compile, parse, ids and wiring — the checks after any edit"),
     ("units", "the pure logic, against the real engine's own code"),
+    ("reuse", "offline model reuse and one-shot location recovery"),
     ("api", "the HTTP surface, end to end against a fake engine"),
     ("ui", "the interface itself, in a browser"),
 ]
