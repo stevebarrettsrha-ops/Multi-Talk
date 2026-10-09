@@ -13,11 +13,15 @@ before a render started:
   then loads the state dict into it (exit code 3221225477, 0xC0000005).
 
 load_safetensors() reads each tensor straight from the file into its own
-buffer, and requantize_in_place() makes those buffers the model's.
+buffer, or maps the file read-only (see there), and requantize_in_place()
+makes those tensors the model's.
 """
 import json
+import os
 import struct
+import warnings
 
+import numpy as np
 import torch
 
 _DTYPES = {
@@ -31,29 +35,54 @@ for _name, _attr in (("F8_E4M3", "float8_e4m3fn"), ("F8_E5M2", "float8_e5m2")):
         _DTYPES[_name] = getattr(torch, _attr)
 
 
-def load_safetensors(path):
-    """safetensors.torch.load_file() without the memory map: same dict of
-    CPU tensors, but nothing beyond the tensors themselves is committed."""
-    out = {}
+def load_safetensors(path, mapped=False):
+    """safetensors.torch.load_file() without its copy-on-write map.
+
+    mapped=False reads each tensor into its own buffer: the file is held in
+    RAM once. mapped=True maps the file read-only instead: the tensors are
+    the file's own pages, which Windows reads from disk when touched and
+    may drop again when RAM is short, and which count against neither RAM
+    nor the page file. That is what lets the 16.5 GB DiT run on a PC with
+    8 GB of RAM (slower: what does not stay cached is read from disk again
+    on every step). Mapped tensors must never be written to; the engine
+    only ever copies them to the GPU or computes from them.
+    """
     with open(path, "rb", buffering=0) as f:
         (header_len,) = struct.unpack("<Q", f.read(8))
         header = json.loads(f.read(header_len))
+        size = os.fstat(f.fileno()).st_size
         header.pop("__metadata__", None)
         base = 8 + header_len
-        for name, info in sorted(header.items(),
-                                 key=lambda kv: kv[1]["data_offsets"][0]):
+        items = sorted(header.items(), key=lambda kv: kv[1]["data_offsets"][0])
+        end_of_data = max((i["data_offsets"][1] for _, i in items), default=0)
+        if base + end_of_data > size:
+            raise OSError(f"{path} is truncated ({size} of {base + end_of_data}"
+                          " bytes; download it again on the Models page)")
+        whole = None
+        if mapped and size > base:
+            with warnings.catch_warnings():  # read-only on purpose
+                warnings.simplefilter("ignore", UserWarning)
+                whole = torch.from_numpy(np.memmap(path, dtype=np.uint8,
+                                                   mode="r"))
+        out = {}
+        for name, info in items:
             start, end = info["data_offsets"]
-            buf = torch.empty(end - start, dtype=torch.uint8)
-            view = memoryview(buf.numpy())
-            f.seek(base + start)
-            got = 0
-            while got < len(view):
-                n = f.readinto(view[got:])
-                if not n:
-                    raise OSError(f"{path} is truncated at tensor {name} "
-                                  "(download it again on the Models page)")
-                got += n
-            out[name] = buf.view(_DTYPES[info["dtype"]]).reshape(info["shape"])
+            dtype = _DTYPES[info["dtype"]]
+            esize = torch.empty(0, dtype=dtype).element_size()
+            if whole is not None and (base + start) % esize == 0:
+                raw = whole[base + start:base + end]
+            else:
+                raw = torch.empty(end - start, dtype=torch.uint8)
+                view = memoryview(raw.numpy())
+                f.seek(base + start)
+                got = 0
+                while got < len(view):
+                    n = f.readinto(view[got:])
+                    if not n:
+                        raise OSError(f"{path} is truncated at tensor {name} "
+                                      "(download it again on the Models page)")
+                    got += n
+            out[name] = raw.view(dtype).reshape(info["shape"])
     return out
 
 

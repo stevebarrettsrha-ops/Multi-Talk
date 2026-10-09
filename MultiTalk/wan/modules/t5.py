@@ -509,9 +509,9 @@ class T5EncoderModel:
                     dtype=dtype,
                     device=torch.device('meta'))
             logging.info(f'Loading quantized T5 from {os.path.join(quant_dir, "quant_models", f"t5_{quant}.safetensors")}')
-            # read without a memory map and loaded without a second copy of
-            # the model: Windows commits both (MultiTalk Studio)
-            model_state_dict = load_safetensors(os.path.join(quant_dir, "quant_models", f"t5_{quant}.safetensors"))
+            # mapped read-only and loaded without a second copy of the model,
+            # so it costs neither RAM nor page file (MultiTalk Studio)
+            model_state_dict = load_safetensors(os.path.join(quant_dir, "quant_models", f"t5_{quant}.safetensors"), mapped=True)
             with open(os.path.join(quant_dir, "quant_models", f"t5_map_{quant}.json"), "r") as f:
                 quantization_map = json.load(f)
             requantize_in_place(model, model_state_dict, quantization_map)

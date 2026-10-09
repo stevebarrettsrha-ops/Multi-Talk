@@ -430,10 +430,12 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
     if ram and peak and ram < peak * 0.8:
         worse("hard")
         notes.append(f"{ram / GIB:.0f} GB of system RAM against a "
-                     f"~{peak / GIB:.0f} GB peak — the INT8 model and text "
-                     "encoder live in RAM while the GPU borrows them. Windows "
-                     "will page to disk for most of every step; a render can "
-                     "take hours. 32 GB is the practical minimum.")
+                     f"~{peak / GIB:.0f} GB peak. The engine maps the INT8 "
+                     "model from its file, so it runs, but what does not fit "
+                     "in RAM is read from the disk again on every step: keep "
+                     "the weights on an SSD (NVMe if you have one), never a "
+                     "hard drive, and expect renders many times slower. "
+                     "32 GB keeps it all in RAM.")
     elif ram and peak and ram < peak * 1.1:
         worse("tight")
         notes.append(f"{ram / GIB:.0f} GB of system RAM against a "

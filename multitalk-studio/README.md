@@ -44,10 +44,12 @@ The weights are the floor:
 The ≈ sizes are estimates until HuggingFace is asked. Setup reads the real
 ones before it starts.
 
-**System RAM matters as much as VRAM.** The INT8 model and text encoder live
-in RAM while the GPU borrows them, so a render peaks around 29 GB of RAM.
-32 GB is the practical minimum. With 16 GB, Windows pages to disk for most
-of every step.
+**System RAM matters as much as VRAM.** The GPU borrows the INT8 model and
+text encoder a layer at a time, so a render wants around 29 GB of RAM to
+keep them all cached. The engine maps both from their files read-only, so
+less RAM still runs (8 GB included) and needs no big page file. Whatever
+does not fit is read from the disk again on every step, so keep the weights
+on an SSD, and expect it to be many times slower than with 32 GB.
 
 **Expect minutes per clip, not seconds.** The model renders in 3.2 second
 clips: 81 frames at 25 fps. Longer speech is a chain of clips, each adding
@@ -261,8 +263,10 @@ code. Upstream behaviour is unchanged unless a new option is used.
   `optimum.quanto.requantize` builds the model empty in float32 (four times
   the INT8 file) before loading into it. On a 32 GB PC that stopped a render
   at "Loading the model into RAM" with exit code 3221225477 or "The paging
-  file is too small (os error 1455)". Now each tensor is read straight from
-  the file into its own buffer, and those buffers become the model's.
+  file is too small (os error 1455)". Now the files are mapped read-only:
+  the tensors are the file's own pages, which count against neither RAM nor
+  the page file, and Windows re-reads them from disk when RAM is short. That
+  also lets a PC with 8 GB of RAM run it, slowly.
 - **Encode and decode are announced.** `[clip] encoding…` and
   `[clip] decoding…` lines let the job card say "reading the picture" and
   "decoding the frames" instead of sitting on the last step.

@@ -194,15 +194,16 @@ class MultiTalkPipeline:
             # load quantized model
             if lora_dir is not None:
                 logging.info(f"Loading Quantized LoRA from {lora_dir[0]}")
-                model_state_dict = load_safetensors(lora_dir[0])
+                model_state_dict = load_safetensors(lora_dir[0], mapped=True)
                 map_json_path = os.path.join(os.path.dirname(lora_dir[0]),f"quantization_map_{quant}_FusionX.json")
             else:
-                model_state_dict = load_safetensors(os.path.join(quant_dir,"quant_models", f"dit_model_{quant}.safetensors"))
+                model_state_dict = load_safetensors(os.path.join(quant_dir,"quant_models", f"dit_model_{quant}.safetensors"), mapped=True)
                 map_json_path = os.path.join(quant_dir,"quant_models", f"dit_model_map_{quant}.json")
             self.model.init_freqs()
             with open(map_json_path, "r") as f:
                 quantization_map = json.load(f)
-            # without upstream's second copy of the model (MultiTalk Studio)
+            # mapped read-only, without upstream's second copy of the model:
+            # runs with 8 GB of RAM (MultiTalk Studio, wan/utils/lowmem_load.py)
             requantize_in_place(self.model, model_state_dict, quantization_map)
             del model_state_dict
             gc.collect()
