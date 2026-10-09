@@ -745,6 +745,39 @@ def has_engine(path: Path | None) -> bool:
         return False
 
 
+def _engine_weights_path(weights: str, eng: str) -> bool:
+    """Compare a saved default on either Windows or POSIX, without disk I/O."""
+    def normalized(path):
+        value = re.sub(r"[\\/]+", "/", path).rstrip("/")
+        return value.casefold() if re.match(r"^[a-zA-Z]:/", value) else value
+    return bool(eng) and normalized(weights) == normalized(eng) + "/weights"
+
+
+def heal_weights(cfg: dict, old_engine: str, new_engine: Path) -> list[str]:
+    """Preserve a missing external drive; only adopt an identified relocation.
+
+    The old engine's own weights folder may follow that engine's move, even
+    if currently empty. A separate explicit folder needs a complete required
+    model set at its rebased destination: an empty suffix match is not proof.
+    """
+    old = cfg.get("weights_dir") or ""
+    if not old or Path(old).is_dir():
+        return []
+    moved = None
+    if str(new_engine) != old_engine and _engine_weights_path(old, old_engine):
+        candidate = new_engine / "weights"
+        if candidate.is_dir():
+            moved = candidate
+    if moved is None:
+        candidate = rebase_path(old)
+        if candidate and candidate.is_dir() and not missing_models(candidate, cfg):
+            moved = candidate
+    if moved is None:
+        return []
+    cfg["weights_dir"] = str(moved)
+    return [f"Weights folder found at {moved}"]
+
+
 def heal_paths(cfg: dict) -> list[str]:
     """Repair saved paths that no longer exist. Returns what changed."""
     notes: list[str] = []
@@ -757,15 +790,7 @@ def heal_paths(cfg: dict) -> list[str]:
                 eng = c
                 notes.append(f"MultiTalk engine found at {c}")
                 break
-    old_w = cfg.get("weights_dir") or ""
-    if old_w and not Path(old_w).is_dir():
-        moved = rebase_path(old_w)
-        if moved and moved.is_dir():
-            cfg["weights_dir"] = str(moved)
-            notes.append(f"Weights folder found at {moved}")
-        elif (eng / "weights").is_dir():
-            cfg["weights_dir"] = ""     # the default: <engine_dir>/weights
-            notes.append(f"Weights folder found at {eng / 'weights'}")
+    notes.extend(heal_weights(cfg, old_eng, eng))
     py = cfg.get("python") or ""
     if py and not Path(py).exists():
         moved = rebase_path(py)
@@ -904,12 +929,10 @@ def verify_locations(cfg: dict, search: bool = True, log=None,
         say("No MultiTalk engine found on this computer — set its folder "
             "in Settings or use Recheck to search again.")
         return notes
+    old_engine = str(engine_dir(cfg))
     cfg["engine_dir"] = str(hit)
     notes.append(f"MultiTalk engine found at {hit}")
-    w = cfg.get("weights_dir") or ""
-    if w and not Path(w).is_dir() and (hit / "weights").is_dir():
-        cfg["weights_dir"] = ""
-        notes.append(f"Weights folder found at {hit / 'weights'}")
+    notes.extend(heal_weights(cfg, old_engine, hit))
     cfg["_location_check"] = location_key(cfg)
     cfg.pop("_location_search_attempt", None)
     return notes

@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from harness import Suite
+from harness import Suite, fake_weights
 import bootstrap
 import engine
 import manager
@@ -107,6 +107,93 @@ def run():
                 s.equal("engine points at the adopted Wan directory",
                         argv[argv.index("--ckpt_dir") + 1],
                         engine.as_path(bootstrap.weights_dir(cfg) / bootstrap.WAN_DIR))
+
+    # A disconnected external model drive is not an invitation to switch
+    # back to the empty weights folder bundled with the engine.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        eng = root / "engine"
+        put(eng / "generate_multitalk.py")
+        (eng / "weights").mkdir()
+        external = root / "external-drive" / "weights"
+        unrelated = root / "empty-suffix-match" / "weights"
+        unrelated.mkdir(parents=True)
+        cfg = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(eng),
+                   weights_dir=str(external), want_tts=False)
+        with patch.object(bootstrap, "rebase_path", return_value=unrelated), \
+                patch.object(bootstrap, "find_engine_installs") as scan, \
+                patch.object(bootstrap, "heal_weights", wraps=bootstrap.heal_weights) as heal:
+            bootstrap.verify_locations(cfg)
+            s.equal("missing separate weights drive keeps its saved location",
+                    cfg["weights_dir"], str(external))
+            s.equal("an unrelated empty suffix does not replace external weights",
+                    bootstrap.weights_dir(cfg), external)
+            cfg = json.loads(json.dumps(cfg))
+            bootstrap.verify_locations(cfg)
+            bootstrap.verify_locations(cfg)
+            s.equal("unchanged missing drive does not repeat relocation attempts",
+                    heal.call_count, 1)
+            s.equal("valid engine does not trigger a drive search", scan.call_count, 0)
+            # Both setup and Download set resolve through this same weights_dir.
+            item = bootstrap.model_set(cfg)[0]
+            with patch.object(bootstrap, "expand", return_value=[item]), \
+                    patch.object(manager, "download_item", return_value=None) as download:
+                manager.download_set(cfg)
+            saved_cfg, planned = download.call_args.args
+            s.check("download destination stays on the explicit external root",
+                    bootstrap.model_path(bootstrap.weights_dir(saved_cfg), planned)
+                    .is_relative_to(external))
+            s.check("failed checks did not create either missing destination",
+                    not external.exists() and list((eng / "weights").iterdir()) == [])
+            fake_weights(external, tts=False)
+            bootstrap.verify_locations(cfg)
+            s.equal("reappearing external drive resumes at the saved path",
+                    cfg["weights_dir"], str(external))
+            with patch.object(bootstrap.requests, "get", side_effect=AssertionError("Network used")) as net:
+                s.equal("returned drive's downloaded weights are reused", manager.download_set(cfg), [])
+                s.equal("returned weights require no requests", net.call_count, 0)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        old_eng, new_eng = root / "old-engine", root / "new-engine"
+        put(new_eng / "generate_multitalk.py")
+        (new_eng / "weights").mkdir()
+        external = root / "missing-external" / "weights"
+        cfg = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(old_eng),
+                   weights_dir=str(old_eng / "weights"))
+        with patch.dict(bootstrap.DEFAULT_CONFIG, {"engine_dir": str(new_eng)}), \
+                patch.object(bootstrap, "rebase_path", return_value=None):
+            bootstrap.verify_locations(cfg, search=False)
+            s.equal("quick relocation keeps engine-relative default weights together",
+                    bootstrap.weights_dir(cfg), new_eng / "weights")
+            separate = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(old_eng),
+                            weights_dir=str(external))
+            bootstrap.verify_locations(separate, search=False)
+            s.equal("quick engine relocation preserves separate missing weights",
+                    bootstrap.weights_dir(separate), external)
+        with patch.dict(bootstrap.DEFAULT_CONFIG, {"engine_dir": str(root / "absent-default")}), \
+                patch.object(bootstrap, "rebase_path", return_value=None), \
+                patch.object(bootstrap, "find_engine_installs", return_value=[new_eng]) as scan:
+            separate = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(old_eng),
+                            weights_dir=str(external))
+            bootstrap.verify_locations(separate)
+            s.equal("full search relocates the engine", bootstrap.engine_dir(separate), new_eng)
+            s.equal("full search preserves separate missing weights", bootstrap.weights_dir(separate), external)
+            bootstrap.verify_locations(separate)
+            s.equal("full engine search is not repeated for disconnected weights", scan.call_count, 1)
+            attached = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(old_eng),
+                            weights_dir=str(old_eng / "weights"))
+            bootstrap.verify_locations(attached)
+            s.equal("full search also moves engine-relative default weights",
+                    bootstrap.weights_dir(attached), new_eng / "weights")
+        relocated = root / "validated-external-move"
+        fake_weights(relocated, tts=False)
+        separate = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(new_eng),
+                        weights_dir=str(external), want_tts=False)
+        with patch.object(bootstrap, "rebase_path", return_value=relocated):
+            bootstrap.verify_locations(separate)
+        s.equal("complete required model set validates a separate folder relocation",
+                bootstrap.weights_dir(separate), relocated)
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

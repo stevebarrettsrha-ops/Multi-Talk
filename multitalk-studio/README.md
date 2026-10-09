@@ -110,6 +110,11 @@ the app tries recovery once for that changed state and remembers an
 unsuccessful drive search across restarts. Normal polling and package
 refreshes do not repeat the search. **Engine → Recheck** explicitly allows
 another recovery attempt; changing a path also permits a new check.
+An explicitly selected external weights folder remains selected while its
+drive is disconnected; the app does not switch to an empty bundled folder.
+Engine-relative default weights follow a relocated engine. A separate saved
+folder is adopted at a rebased location only when the required model set is
+present there.
 
 flash-attn and xfuser are **not** installed. flash-attn has no Windows
 wheels and xfuser is only for multi-GPU runs. The engine falls back to
