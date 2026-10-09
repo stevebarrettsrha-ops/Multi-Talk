@@ -561,6 +561,9 @@ class MultiTalkPipeline:
                 padding_frames_pixels_values = torch.concat([cond_image, video_frames], dim=2)
                 logging.info("[clip] encoding the reference frames")
                 y = self.vae.encode(padding_frames_pixels_values) 
+                # MultiTalk Studio: these full float32 pixel buffers are no
+                # longer needed. empty_cache cannot free live tensors.
+                del padding_frames_pixels_values, video_frames
                 y = torch.stack(y).to(self.param_dtype) # B C T H W
                 cur_motion_frames_latent_num = int(1 + (cur_motion_frames_num-1) // 4)
                 latent_motion_frames = y[:, :, :cur_motion_frames_latent_num][0] # C T H W
@@ -764,6 +767,10 @@ class MultiTalkPipeline:
                 torch_gc()
 
                 logging.info("[clip] decoding the frames")
+                # MultiTalk Studio: keep the tiled output canvas off CUDA;
+                # the continuation explicitly copies only its motion frames
+                # back to the device below.
+                self.vae.model.decode_output_device = "cpu" if offload_model else None
                 videos = self.vae.decode(x0) 
             
             # cache generated samples

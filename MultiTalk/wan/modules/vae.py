@@ -612,7 +612,7 @@ class WanVAE_(nn.Module):
         starts = list(range(0, size - tile, step)) + [size - tile]
         return sorted(set(starts))
 
-    def _tiled(self, x, fn, tile, overlap, scale_out):
+    def _tiled(self, x, fn, tile, overlap, scale_out, output_device=None):
         """Run fn over spatial tiles of x and blend. scale_out is the size
         ratio of fn's output to its input (8 for decode, 1/8 for encode)."""
         _, _, _, h, w = x.shape
@@ -625,6 +625,11 @@ class WanVAE_(nn.Module):
             for x0 in xs:
                 y1, x1 = min(y0 + tile, h), min(x0 + tile, w)
                 piece = fn(x[:, :, :, y0:y1, x0:x1])
+                # MultiTalk Studio: accumulate decoded pixels in host RAM.
+                # Otherwise tiling still holds a full float video on CUDA,
+                # plus a second full video for the final out / weight.
+                if output_device is not None:
+                    piece = piece.to(output_device)
                 oy0, ox0 = int(round(y0 * scale_out)), int(round(x0 * scale_out))
                 ph, pw = piece.shape[-2], piece.shape[-1]
                 if out is None:
@@ -641,7 +646,7 @@ class WanVAE_(nn.Module):
                 out[..., oy0:oy0 + ph, ox0:ox0 + pw] += piece * mask
                 weight[..., oy0:oy0 + ph, ox0:ox0 + pw] += mask
                 del piece
-        return out / weight
+        return out.div_(weight)
 
     def encode(self, x, scale):
         tile = int(self.tile_size or 0)
@@ -655,7 +660,8 @@ class WanVAE_(nn.Module):
         tile = int(self.tile_size or 0)
         if tile and (z.shape[-1] > tile or z.shape[-2] > tile):
             return self._tiled(z, lambda p: self._decode_plain(p, scale),
-                               tile, int(self.tile_overlap), 8)
+                               tile, int(self.tile_overlap), 8,
+                               output_device=getattr(self, "decode_output_device", None))
         return self._decode_plain(z, scale)
 
     def reparameterize(self, mu, log_var):

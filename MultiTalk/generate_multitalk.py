@@ -623,6 +623,11 @@ def generate(args):
                 input_data['cond_audio']['person2'] = emb2_path
                 input_data['video_audio'] = sum_audio
 
+        # MultiTalk Studio: wav2vec2 is finished; its CPU weights should not
+        # compete with the quantized DiT and T5 in host RAM.
+        del audio_encoder, wav2vec_feature_extractor
+        import gc
+        gc.collect()
 
     logging.info("Creating MultiTalk pipeline.")
     wan_i2v = wan.MultiTalkPipeline(
