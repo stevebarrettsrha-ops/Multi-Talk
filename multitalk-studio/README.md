@@ -87,6 +87,35 @@ The first launch opens the setup sheet. It runs these steps:
 Each step shows live progress. A failed or cancelled download keeps what
 arrived and resumes next time.
 
+Already downloaded the models? Set **Settings → weights folder** to the
+folder containing `Wan2.1-I2V-14B-480P`, `MeiGen-MultiTalk`,
+`chinese-wav2vec2-base` and, if used, `Kokoro-82M`. Rendering passes those
+locations to the engine. Existing finished files are kept. Setup and
+**Download set** also reuse matching Hugging Face cache snapshots before
+contacting the Hub, including wav2vec's specific `refs/pr/1` revision.
+`HF_HUB_CACHE`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TRANSFORMERS_CACHE`
+and the standard `~/.cache/huggingface/hub` layout are supported. Same-drive
+reuse uses hard links; copying across drives needs additional disk space.
+No cache originals are removed or overwritten.
+
+A tokenizer folder must contain its config and vocabulary. Empty files,
+unfinished `.part`/`.incomplete` downloads and Git LFS pointer stubs do not
+count as ready. Known byte counts are checked when files are adopted from a
+listed download; large cached weights below half their published estimate
+are rejected. These checks do not certify model contents: **Test the engine**
+is still needed to validate a complete real render.
+
+The last verified paths are saved and reused. If a location stops working,
+the app tries recovery once for that changed state and remembers an
+unsuccessful drive search across restarts. Normal polling and package
+refreshes do not repeat the search. **Engine → Recheck** explicitly allows
+another recovery attempt; changing a path also permits a new check.
+An explicitly selected external weights folder remains selected while its
+drive is disconnected; the app does not switch to an empty bundled folder.
+Engine-relative default weights follow a relocated engine. A separate saved
+folder is adopted at a rebased location only when the required model set is
+present there.
+
 flash-attn and xfuser are **not** installed. flash-attn has no Windows
 wheels and xfuser is only for multi-GPU runs. The engine falls back to
 PyTorch's own fused attention without them.
@@ -179,7 +208,7 @@ machine. The test clip goes into the Library so you can watch it.
 ## Tests
 
 ```bash
-python tests/run.py            # gate, units, api, ui
+python tests/run.py            # gate, units, reuse, api, ui
 python tests/run.py gate       # compile, script parse, ids, wiring
 ```
 
@@ -191,12 +220,19 @@ python tests/run.py gate       # compile, script parse, ids, wiring
   `generate_multitalk.py` parser, and that the clip arithmetic matches the
   engine's own loop. The preflight verdicts, the weight set, folder
   expansion and path safety are covered too.
+- **reuse** verifies cache reuse without network requests and checks that
+  failed location searches are remembered until a path changes or Recheck
+  is explicitly requested.
 - **api** runs the real server against `tests/fake_engine/`, a stand-in that
   takes the real command line and prints the real engine's log lines. It
   covers uploads, renders, the queue, cancel, failures, and resumable
   downloads against a stand-in HuggingFace.
 - **ui** drives the page in Chromium through Playwright, and skips itself
   when Playwright is missing.
+
+GitHub CI runs these checks on Python 3.10 and 3.13, with the browser tests
+on 3.10. It installs CPU PyTorch to execute the real environment probe;
+no trained model weights or CUDA packages are downloaded.
 
 The engine patches have their own CPU test: `python
 ../MultiTalk/tests/test_lowvram_patches.py`. It needs torch. Run

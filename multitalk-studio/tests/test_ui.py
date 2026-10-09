@@ -141,6 +141,15 @@ def run(slow: bool = False) -> Suite:
             page.wait_for_selector("#depList .fitem", timeout=60000)
             s.check("the Engine page lists the dependencies",
                     page.locator("#depList .fitem").count() >= 6)
+            with page.expect_request(lambda r: "/api/deps?" in r.url) as recheck:
+                page.click("#btnRecheck")
+            s.check("Recheck explicitly requests relocation recovery",
+                    "relocate=1" in recheck.value.url)
+            page.wait_for_function("!document.querySelector('#btnRecheck').disabled")
+            with page.expect_request(lambda r: "/api/deps?" in r.url) as refresh:
+                page.evaluate("loadDeps(true)")
+            s.check("automatic package refresh does not request relocation",
+                    "fresh=1" in refresh.value.url and "relocate=" not in refresh.value.url)
             page.wait_for_selector("#preflight .fitem", timeout=60000)
             if shots:
                 page.screenshot(path=f"{shots}/engine.png", full_page=True)

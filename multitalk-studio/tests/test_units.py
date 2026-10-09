@@ -270,10 +270,10 @@ def run(slow: bool = False) -> Suite:
         _sh.copytree(fake, broken)
         src_ = (broken / "generate_multitalk.py").read_text()
         (broken / "generate_multitalk.py").write_text(
-            "from inspect import ArgSpec\n" + src_)
+            "raise ImportError('deliberately missing fixture dependency')\n" + src_)
         ok, why = bootstrap.check_engine_loads(sys.executable, broken)
         s.check("and fails one that cannot import, naming why",
-                not ok and "ArgSpec" in why, why)
+                not ok and "deliberately missing fixture dependency" in why, why)
     s.check("the real engine no longer imports inspect.ArgSpec (gone in 3.11)",
             "from inspect import ArgSpec" not in
             (REAL_ENGINE / "wan/multitalk.py").read_text())
@@ -373,7 +373,8 @@ def run(slow: bool = False) -> Suite:
             t = bootstrap.model_path(w, item)
             if item["prefix"]:
                 t.mkdir(parents=True, exist_ok=True)
-                (t / "x.json").write_text("{}")
+                (t / "tokenizer_config.json").write_text("{}")
+                (t / "tokenizer.json").write_text("{}")
             else:
                 t.parent.mkdir(parents=True, exist_ok=True)
                 t.write_bytes(b"placeholder")
@@ -414,7 +415,11 @@ def run(slow: bool = False) -> Suite:
         s.check("a folder still downloading is not present",
                 not bootstrap.present(w, folder))
         (target / "a.json.part").rename(target / "a.json")
-        s.check("a finished folder is present", bootstrap.present(w, folder))
+        s.check("a random JSON file is not a complete tokenizer",
+                not bootstrap.present(w, folder))
+        (target / "tokenizer_config.json").write_text("{}")
+        (target / "tokenizer.json").write_text("{}")
+        s.check("a finished tokenizer folder is present", bootstrap.present(w, folder))
 
         # path safety
         wcfg = dict(cfg, weights_dir=str(w))

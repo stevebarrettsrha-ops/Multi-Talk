@@ -125,7 +125,7 @@ def fake_weights(wdir: Path, precision: str = "int8-fusionx",
         if item["prefix"]:
             target.mkdir(parents=True, exist_ok=True)
             names = ["af_heart.pt", "am_adam.pt"] if "voices" in item["path"] \
-                else ["tokenizer.json"]
+                else ["tokenizer.json", "tokenizer_config.json"]
             for n in names:
                 (target / n).write_bytes(b"\x00" * 8)
         else:

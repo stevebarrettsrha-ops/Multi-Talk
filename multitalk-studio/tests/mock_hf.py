@@ -27,6 +27,7 @@ REPOS = {
         "google/umt5-xxl/spiece.model": 4_000,
         "google/umt5-xxl/tokenizer_config.json": 300,
         "xlm-roberta-large/tokenizer.json": 5_000,
+        "xlm-roberta-large/tokenizer_config.json": 300,
         "xlm-roberta-large/sentencepiece.bpe.model": 4_000,
         "diffusion_pytorch_model-00001-of-00007.safetensors": 999_999,
     },

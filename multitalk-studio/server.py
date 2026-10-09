@@ -53,12 +53,6 @@ setup_lock = threading.Lock()
 # set while the start-up search walks the drives, so the Engine page says
 # "searching" instead of "missing" and Recheck does not start a second walk
 locating = threading.Event()
-# When the last search ended. The page re-polls while "searching"; a poll
-# right after a fruitless search must show "not found" (and Install), not
-# start the next walk of the drives — so Recheck searches again only after
-# this rest.
-_search_done = [float("-inf")]
-SEARCH_REST = 30.0
 _locate_lock = threading.Lock()
 
 
@@ -66,7 +60,7 @@ def _say(msg: str) -> None:
     print(f"[multitalk-studio] {msg}", flush=True)
 
 
-def _heal(search: bool = False) -> None:
+def _heal(search: bool = False, force: bool = False) -> None:
     """Verify the saved locations; repair any that moved.
 
     Without `search` only the quick repair runs (a moved repo folder). With
@@ -84,9 +78,12 @@ def _heal(search: bool = False) -> None:
     try:
         if search:
             locating.set()
-        notes = bootstrap.verify_locations(cfg, search=search, log=_say)
-        if notes:
+        before = dict(cfg)
+        notes = bootstrap.verify_locations(cfg, search=search, log=_say,
+                                           force=force)
+        if cfg != before:
             save_config(cfg)
+        if notes:
             manager.forget()
             for n in notes:
                 _say(n)
@@ -95,17 +92,8 @@ def _heal(search: bool = False) -> None:
                 _say("Verified " + line)
     finally:
         if search:
-            _search_done[0] = time.monotonic()
             locating.clear()
         _locate_lock.release()
-
-
-def _needs_search() -> bool:
-    return not bootstrap.has_engine(bootstrap.engine_dir(cfg))
-
-
-def _rested() -> bool:
-    return time.monotonic() - _search_done[0] > SEARCH_REST
 
 
 _heal()
@@ -452,13 +440,12 @@ def api_deps():
     if request.args.get("fresh"):
         manager.forget()
     if not locating.is_set():
-        _heal()
-        if _needs_search() and _rested() and \
+        force = request.args.get("relocate") == "1"
+        _heal(force=force)
+        if (force or bootstrap.needs_location_search(cfg)) and \
                 os.environ.get("MULTITALK_STUDIO_NO_SEARCH") != "1":
-            # Recheck with the engine still nowhere: search the drives, in
-            # the background — the page polls and the row says "searching"
             locating.set()
-            threading.Thread(target=_heal, args=(True,), daemon=True).start()
+            threading.Thread(target=_heal, args=(True, force), daemon=True).start()
     searching = locating.is_set()
     return jsonify({"items": manager.dependencies(cfg, searching=searching),
                     "searching": searching,
