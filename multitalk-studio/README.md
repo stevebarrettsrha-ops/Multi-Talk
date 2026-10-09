@@ -203,7 +203,7 @@ machine. The test clip goes into the Library so you can watch it.
 ## Tests
 
 ```bash
-python tests/run.py            # gate, units, api, ui
+python tests/run.py            # gate, units, reuse, api, ui
 python tests/run.py gate       # compile, script parse, ids, wiring
 ```
 
@@ -215,12 +215,19 @@ python tests/run.py gate       # compile, script parse, ids, wiring
   `generate_multitalk.py` parser, and that the clip arithmetic matches the
   engine's own loop. The preflight verdicts, the weight set, folder
   expansion and path safety are covered too.
+- **reuse** verifies cache reuse without network requests and checks that
+  failed location searches are remembered until a path changes or Recheck
+  is explicitly requested.
 - **api** runs the real server against `tests/fake_engine/`, a stand-in that
   takes the real command line and prints the real engine's log lines. It
   covers uploads, renders, the queue, cancel, failures, and resumable
   downloads against a stand-in HuggingFace.
 - **ui** drives the page in Chromium through Playwright, and skips itself
   when Playwright is missing.
+
+GitHub CI runs these checks on Python 3.10 and 3.13, with the browser tests
+on 3.10. It installs CPU PyTorch to execute the real environment probe;
+no trained model weights or CUDA packages are downloaded.
 
 The engine patches have their own CPU test: `python
 ../MultiTalk/tests/test_lowvram_patches.py`. It needs torch. Run

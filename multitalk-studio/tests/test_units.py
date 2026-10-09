@@ -270,10 +270,10 @@ def run(slow: bool = False) -> Suite:
         _sh.copytree(fake, broken)
         src_ = (broken / "generate_multitalk.py").read_text()
         (broken / "generate_multitalk.py").write_text(
-            "from inspect import ArgSpec\n" + src_)
+            "raise ImportError('deliberately missing fixture dependency')\n" + src_)
         ok, why = bootstrap.check_engine_loads(sys.executable, broken)
         s.check("and fails one that cannot import, naming why",
-                not ok and "ArgSpec" in why, why)
+                not ok and "deliberately missing fixture dependency" in why, why)
     s.check("the real engine no longer imports inspect.ArgSpec (gone in 3.11)",
             "from inspect import ArgSpec" not in
             (REAL_ENGINE / "wan/multitalk.py").read_text())
