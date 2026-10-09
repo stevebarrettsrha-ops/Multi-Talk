@@ -399,10 +399,10 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
     this app's 8 GB settings: the VAE (~0.3 GB), one DiT block at a time
     (~0.4 GB in INT8) and the activations of a 480 px, 81-frame clip
     (~3-4 GB). CLIP (~2.4 GB) visits the GPU before sampling and is sent
-    back to RAM; the text encoder never comes. 8 GB therefore fits with
-    little room to spare — "tight", not "hard". "Hard" is kept for what
-    genuinely blocks: under ~6 GB of VRAM, RAM too small to hold the
-    weights, disk short of the download.
+    back to RAM; the text encoder never comes. These estimates have not
+    been validated on a real 8 GB card; that is "tight", not "hard". "Hard"
+    is kept for what genuinely blocks: under ~6 GB of VRAM, RAM too small
+    to hold the weights, disk short of the download.
     """
     notes, verdict = [], "ok"
 
@@ -419,11 +419,11 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
                      "Expect out-of-memory stops.")
     elif vram and vram < 10 * GIB:
         worse("tight")
-        notes.append(f"{vram / GIB:.0f} GB of VRAM — workable with this app's "
-                     "8 GB settings: INT8 weights streamed from RAM, the "
+        notes.append(f"{vram / GIB:.0f} GB of VRAM — try this app's "
+                     "low-memory settings: INT8 weights streamed from RAM, the "
                      "prompt encoded on the CPU, tiled VAE, 480 px. Close "
                      "games and browsers with hardware acceleration while it "
-                     "renders; every hundred MB counts.")
+                     "renders. Real-checkpoint 8 GB operation is not yet verified.")
     elif vram and vram < 16 * GIB:
         notes.append(f"{vram / GIB:.0f} GB of VRAM — 640 px, the trained "
                      "size, is within reach.")
@@ -431,15 +431,15 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
         worse("hard")
         notes.append(f"{ram / GIB:.0f} GB of system RAM against a "
                      f"~{peak / GIB:.0f} GB peak. The engine maps the INT8 "
-                     "model from its file, so it runs, but what does not fit "
-                     "in RAM is read from the disk again on every step: keep "
+                     "model from its file, but activations and outputs still "
+                     "need RAM. It may stop or page heavily: keep "
                      "the weights on an SSD (NVMe if you have one), never a "
                      "hard drive, and expect renders many times slower. "
-                     "32 GB keeps it all in RAM.")
+                     "32 GB is a starting point, not a fit guarantee.")
     elif ram and peak and ram < peak * 1.1:
         worse("tight")
         notes.append(f"{ram / GIB:.0f} GB of system RAM against a "
-                     f"~{peak / GIB:.0f} GB peak — it fits, barely. Close "
+                     f"~{peak / GIB:.0f} GB estimated peak — little headroom. Close "
                      "other programs before a render, and keep the page file "
                      "on an SSD.")
     if free_disk and download and free_disk < download * 1.1:
@@ -452,8 +452,8 @@ def assess(vram: int, ram: int, free_disk: int, download: int,
                      "means PyTorch cannot see the card: update the NVIDIA "
                      "driver, then press Measure again.")
     if verdict == "hard":
-        notes.append("It will still install and queue; it may simply be too "
-                     "slow to use.")
+        notes.append("It will still install and queue; generation may fail "
+                     "or be too slow to use.")
     return verdict, notes
 
 

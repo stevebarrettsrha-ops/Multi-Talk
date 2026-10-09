@@ -562,6 +562,7 @@ class WanModel(ModelMixin, ConfigMixin):
     ):
         print("teacache_init")
         self.enable_teacache = True
+        self.clear_teacache()  # MultiTalk Studio: no residuals from a prior clip
         # the smaller buckets (MultiTalk Studio) were not calibrated; the
         # 480 polynomial is the nearest fit
         if model_scale not in ('multitalk-480', 'multitalk-720'):
@@ -597,6 +598,15 @@ class WanModel(ModelMixin, ConfigMixin):
     
     def disable_teacache(self):
         self.enable_teacache = False
+        self.clear_teacache()
+
+    def clear_teacache(self):
+        """MultiTalk Studio: release activation caches before VAE decode."""
+        self.cnt = 0
+        for branch in ("cond", "drop_text", "uncond"):
+            setattr(self, "previous_e0_" + branch, None)
+            setattr(self, "previous_residual_" + branch, None)
+            setattr(self, "accumulated_rel_l1_distance_" + branch, 0)
 
     def forward(
             self,

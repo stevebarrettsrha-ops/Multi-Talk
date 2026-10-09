@@ -41,11 +41,11 @@ def load_safetensors(path, mapped=False):
     mapped=False reads each tensor into its own buffer: the file is held in
     RAM once. mapped=True maps the file read-only instead: the tensors are
     the file's own pages, which Windows reads from disk when touched and
-    may drop again when RAM is short, and which count against neither RAM
-    nor the page file. That is what lets the 16.5 GB DiT run on a PC with
-    8 GB of RAM (slower: what does not stay cached is read from disk again
-    on every step). Mapped tensors must never be written to; the engine
-    only ever copies them to the GPU or computes from them.
+    may drop again when RAM is short. MultiTalk Studio: read-only mapping
+    avoids reserving a private copy of the entire file, but touched pages,
+    activations and outputs still need physical RAM. This does not establish
+    that the full pipeline fits an 8 GB RAM PC. Mapped tensors must never be
+    written to; the engine only copies them to the GPU or computes from them.
     """
     with open(path, "rb", buffering=0) as f:
         (header_len,) = struct.unpack("<Q", f.read(8))

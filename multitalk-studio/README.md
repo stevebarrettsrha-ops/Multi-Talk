@@ -199,7 +199,9 @@ python tests/run.py gate       # compile, script parse, ids, wiring
   when Playwright is missing.
 
 The engine patches have their own CPU test: `python
-../MultiTalk/tests/test_lowvram_patches.py`. It needs torch.
+../MultiTalk/tests/test_lowvram_patches.py`. It needs torch. Run
+`python ../MultiTalk/tests/test_pipeline_lifecycle.py` as well to check
+sampling cleanup and offloading at the decode boundary.
 
 **`tests/tiny_engine/`** runs the real MultiTalk code end to end on a CPU,
 with tiny random weights instead of the 29 GB set:
@@ -225,7 +227,7 @@ RTX 4060 is the remaining check.
 ## What changed in the engine
 
 All changes are in `../MultiTalk` and are marked `MultiTalk Studio` in the
-code. Upstream behaviour is unchanged unless a new option is used.
+code. The memory changes also apply to existing offloading options.
 
 - **Tiled VAE** (`wan/modules/vae.py`). Spatial tiles with linear blending
   on encode and decode, via `--vae_tile` and `--vae_tile_overlap`.
@@ -233,6 +235,9 @@ code. Upstream behaviour is unchanged unless a new option is used.
   decoded tile is copied to CPU before blending. The full pixel canvas and
   its normalization no longer need CUDA storage. Reference padding buffers
   are released before sampling, and wav2vec2 is released before model loading.
+- **Release sampling memory before decode.** Persistent DiT wrappers now
+  offload before the VAE runs. Per-clip conditioning, guidance and TeaCache
+  tensors are released at the same boundary, including on streaming clips.
 - **Smaller sizes** (`wan/configs/__init__.py`,
   `wan/utils/multitalk_utils.py`). `multitalk-360` (480 px) and
   `multitalk-240` (320 px) buckets, scaled from the 640 px table.
