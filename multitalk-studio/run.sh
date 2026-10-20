@@ -21,6 +21,8 @@ if [ "$(uname)" = "Linux" ] && [ -z "${MULTITALK_STUDIO_IN_TERMINAL:-}" ] \
       *) "$term" -e bash "$SELF" && exit 0 ;;
     esac
   done
+  # No window opened: this run carries on here, so it is not one.
+  unset MULTITALK_STUDIO_IN_TERMINAL
   # No terminal found: carry on without one. The page still opens.
 fi
 # In a window we opened, keep it open on failure so the reason can be read.
