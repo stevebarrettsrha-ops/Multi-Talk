@@ -9,8 +9,9 @@ people and what they say; get back a video of them saying it.
 | [`MultiTalk/`](MultiTalk/) | MeiGen's MultiTalk engine with offloading and tiled decode changes targeting an 8 GB card. |
 
 To run it on Windows, double-click `multitalk-studio/run.bat`. On Linux or
-macOS, run `multitalk-studio/run.sh`. Either one opens
-<http://127.0.0.1:7806> and walks you through setup.
+macOS, run `multitalk-studio/run.sh` (from a Linux file manager: right-click
+it, **Run as a Program**). Either one opens <http://127.0.0.1:7806> and walks
+you through setup.
 
 The [studio README](multitalk-studio/README.md) has the hardware notes for
 an RTX 4060 (8 GB): 32 GB of system RAM, about 29 GB of downloads, and

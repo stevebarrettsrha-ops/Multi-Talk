@@ -66,8 +66,15 @@ disk before anything downloads and says which of those applies.
 
 ## Running it
 
-**Windows**: double-click `run.bat`. **Linux and macOS**: run `./run.sh`.
-Both open <http://127.0.0.1:7806>.
+**Windows**: double-click `run.bat`. **Linux and macOS**: open a terminal in
+this folder and run `./run.sh`. Both open <http://127.0.0.1:7806>.
+
+On Linux, double-clicking `run.sh` in the file manager opens it in a text
+editor. Right-click it and pick **Run as a Program** instead; it opens a
+terminal and runs there. If a terminal answers `Permission denied` (an unzip
+can drop the executable bit), run `bash run.sh`. On Debian and Ubuntu the
+first run also needs `sudo apt-get install -y python3-venv`; the script says
+so when it is missing.
 
 The studio needs Python 3.10 or newer. The engine needs **Python 3.10, 3.11
 or 3.12**, because PyTorch 2.4 publishes no wheels for 3.13. If you only have
