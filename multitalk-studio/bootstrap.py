@@ -685,20 +685,86 @@ def find_python(prog: Progress | None = None) -> str:
                        " Install 3.12 from python.org, then run setup again.")
 
 
+_ELF = b"\x7fELF"
+_MACHO = (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+
+
+def foreign_binary(path: Path | str) -> bool:
+    """Is this an executable built for another operating system?
+
+    The repo can live on a drive shared between Windows and Linux, and then
+    it carries the Windows engine environment with it
+    (`engine-venv/Scripts/python.exe`). That file exists, so an existence
+    check trusts it, and every run of it fails with `[Errno 8] Exec format
+    error`. The first bytes say which system a binary is for. Anything
+    unreadable or unrecognised (a script, a missing file) counts as native —
+    this only ever rules out what is plainly foreign.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4)
+    except OSError:
+        return False
+    system = platform.system()
+    if head[:2] == b"MZ":
+        return system != "Windows"
+    if head == _ELF:
+        return system not in ("Linux", "FreeBSD")
+    if head in _MACHO:
+        return system != "Darwin"
+    return False
+
+
+def _venv_layout() -> tuple[str, str]:
+    """(this system's interpreter, the other system's) inside a venv."""
+    if platform.system() == "Windows":
+        return "Scripts/python.exe", "bin/python"
+    return "bin/python", "Scripts/python.exe"
+
+
 def venv_dir() -> Path:
-    return APP_DIR / "engine-venv"
+    """Where the engine environment lives.
+
+    `engine-venv`, unless that folder holds an environment built on another
+    operating system — a repo on a drive shared between Windows and Linux. A
+    venv cannot serve both (its `pyvenv.cfg` names one system's Python), and
+    building over it would break it for the other system, so this system
+    gets its own beside it: `engine-venv-linux` and so on.
+    """
+    venv = APP_DIR / "engine-venv"
+    native, other = _venv_layout()
+    if not (venv / native).exists() and (venv / other).exists():
+        return venv.with_name("engine-venv-" + platform.system().lower())
+    return venv
 
 
 def venv_python() -> Path:
-    return venv_dir() / ("Scripts/python.exe" if platform.system() == "Windows"
-                         else "bin/python")
+    return venv_dir() / _venv_layout()[0]
+
+
+def foreign_python(cfg: dict) -> str:
+    """The engine interpreter that is on disk but built for another operating
+    system — the saved one, or the one in `engine-venv` — or "" when there is
+    none. It is what engine_python() passes over, named so the page can say
+    why instead of showing `[Errno 8] Exec format error`."""
+    py = cfg.get("python") or ""
+    if py and Path(py).is_file() and foreign_binary(py):
+        return py
+    other = APP_DIR / "engine-venv" / _venv_layout()[1]
+    if other.is_file() and foreign_binary(other) \
+            and not (APP_DIR / "engine-venv" / _venv_layout()[0]).exists():
+        return str(other)
+    return ""
 
 
 def engine_python(cfg: dict) -> str:
-    if cfg.get("python") and Path(cfg["python"]).exists():
-        return cfg["python"]
+    """The engine's interpreter, if there is one that can run here. One built
+    for another operating system is not one: it can never run here."""
+    py = cfg.get("python") or ""
+    if py and Path(py).exists() and not foreign_binary(py):
+        return py
     v = venv_python()
-    return str(v) if v.exists() else ""
+    return str(v) if v.exists() and not foreign_binary(v) else ""
 
 
 def torch_index(cfg: dict) -> str:
@@ -795,9 +861,18 @@ def heal_paths(cfg: dict) -> list[str]:
     if py and not Path(py).exists():
         moved = rebase_path(py)
         moved = moved if moved and moved.is_file() else None
+        if moved and foreign_binary(moved):
+            # a Windows config read on Linux lands on engine-venv's
+            # Scripts/python.exe: there, and never runnable here
+            moved = None
         cfg["python"] = str(moved) if moved else ""
         notes.append(f"Engine Python {py} is gone"
                      + (f"; using {moved}" if moved else "; cleared"))
+    elif py and foreign_binary(py):
+        cfg["python"] = ""
+        notes.append(f"Engine Python {py} was built for another operating "
+                     "system; cleared — install the engine environment from "
+                     "the Engine page to build one for this system")
     return notes
 
 
@@ -807,7 +882,8 @@ _SKIP_DIRS = {"windows", "program files", "program files (x86)", "programdata",
               "appdata", "$recycle.bin", "system volume information",
               "recovery", "node_modules", ".git", "__pycache__",
               "site-packages", "lib", "libs", "scripts", ".cache", ".venv",
-              "venv", "engine-venv", "weights", "proc", "sys", "dev", "snap"}
+              "venv", "engine-venv", "engine-venv-linux",
+              "engine-venv-windows", "engine-venv-darwin", "weights", "proc", "sys", "dev", "snap"}
 
 
 def is_engine_dir(path: Path) -> bool:
@@ -895,7 +971,10 @@ def location_key(cfg: dict) -> list:
     py = cfg.get("python") or ""
     return [str(REPO_DIR), str(engine_dir(cfg)), has_engine(engine_dir(cfg)),
             str(weights_dir(cfg)), weights_dir(cfg).is_dir(), py,
-            bool(py and Path(py).is_file())]
+            bool(py and Path(py).is_file()),
+            # a saved interpreter for another system is a failed check too —
+            # and a key without this one (saved before) no longer matches
+            bool(py and foreign_binary(py))]
 
 
 def needs_location_search(cfg: dict) -> bool:
@@ -951,7 +1030,10 @@ def location_report(cfg: dict) -> list[str]:
     else:
         out.append("Weights: not found")
     py = engine_python(cfg)
+    foreign = "" if py else foreign_python(cfg)
     out.append(f"Engine Python: {py} — ok" if py
+               else f"Engine Python: {foreign} is built for another "
+                    "operating system" if foreign
                else "Engine Python: not set up yet")
     return out
 
@@ -1384,6 +1466,9 @@ def check_engine_loads(python: str, eng: Path) -> tuple[bool, str]:
 
 def make_venv(python: str, log) -> Path:
     vpy = venv_python()
+    if venv_dir().name != "engine-venv":
+        log(f"engine-venv was built on another operating system, so it is "
+            f"left as it is and this one gets {venv_dir().name}.")
     if vpy.exists():
         ok = _run([str(vpy), "-m", "pip", "--version"], timeout=60)
         if ok.returncode == 0:

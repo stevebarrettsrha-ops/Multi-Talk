@@ -119,6 +119,18 @@ and `pick_engine()` prefers the checkout holding the weights. While it walks,
 `MULTITALK_STUDIO_NO_SEARCH=1` (set by the test harness) turns it off: test
 configs name made-up folders on purpose.
 
+A saved path can also be *there* and still wrong: a repo on a drive shared by
+Windows and Linux carries the Windows `engine-venv/Scripts/python.exe`, and
+every run of it is `[Errno 8] Exec format error`. `foreign_binary()` reads the
+first bytes (MZ, ELF, Mach-O; anything else is native); `heal_paths()` clears
+a foreign interpreter (also when a rebase lands on one, and `location_key`
+carries it so a remembered check cannot keep it), and `engine_python()` passes
+over one. The foreign venv is never rebuilt in place — that would break it for
+the other system — so `venv_dir()` gives this one `engine-venv-linux` (or
+`-windows`, `-darwin`) beside it, and `run.sh` does the same for a Windows
+`.venv` (`.venv-linux`). The Engine environment row then reads "missing" and
+says why (`foreign_python()`), so Install everything missing builds it.
+
 ## Validation gate
 
 ```bash
