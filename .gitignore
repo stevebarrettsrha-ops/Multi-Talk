@@ -3,7 +3,9 @@ __pycache__/
 # the studio's own state and environments
 multitalk-studio/data/
 multitalk-studio/.venv/
+multitalk-studio/.venv-*/
 multitalk-studio/engine-venv/
+multitalk-studio/engine-venv-*/
 multitalk-studio/tests/.inline.js
 # downloaded weights (tens of GB) and engine scratch output
 MultiTalk/weights/*

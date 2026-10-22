@@ -300,6 +300,11 @@ def engine_blocker() -> str:
     if not (bootstrap.engine_dir(cfg) / "generate_multitalk.py").exists():
         return "The MultiTalk engine folder is missing. Check Settings."
     if not bootstrap.engine_python(cfg):
+        if bootstrap.foreign_python(cfg):
+            return ("The engine environment here was built for another "
+                    "operating system. Press Install beside Engine "
+                    "environment on the Engine page to build one for this "
+                    "system.")
         return "The engine environment is not installed. Run setup."
     missing = bootstrap.missing_models(bootstrap.weights_dir(cfg), cfg)
     if missing:

@@ -166,11 +166,18 @@ def dependencies(cfg: dict, searching: bool = False) -> list[dict]:
                       "action": None})
 
     vpy = bootstrap.engine_python(cfg)
+    detail = vpy or ("A private Python environment for the engine, so "
+                     "nothing touches your system Python.")
+    foreign = "" if vpy else bootstrap.foreign_python(cfg)
+    if foreign:
+        # set up on another system (a drive Windows and Linux share): the
+        # interpreter is on disk, and running it would only say [Errno 8]
+        detail = (f"{foreign} was built for another operating system and "
+                  f"cannot run here. Install builds "
+                  f"{bootstrap.venv_dir().name} for this one and leaves "
+                  "that one as it is.")
     items.append({"id": "venv", "label": "Engine environment",
-                  "state": "ok" if vpy else "missing",
-                  "detail": vpy or "A private Python environment for the "
-                                   "engine, so nothing touches your system "
-                                   "Python.",
+                  "state": "ok" if vpy else "missing", "detail": detail,
                   "action": "reinstall" if vpy else "install"})
 
     if vpy:

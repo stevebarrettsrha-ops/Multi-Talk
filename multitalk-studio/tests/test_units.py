@@ -495,6 +495,102 @@ def run(slow: bool = False) -> Suite:
             bootstrap.REPO_DIR, bootstrap.APP_DIR = real_repo, real_app
             bootstrap.DEFAULT_CONFIG["engine_dir"] = real_default
 
+    # -- set up on Windows, opened on Linux (a drive shared by both) --------
+    # The Windows engine-venv is still on disk, so its python.exe "exists";
+    # every run of it is [Errno 8] Exec format error and no render starts.
+    import platform as _platform
+    from unittest.mock import patch as _patch
+    with tempfile.TemporaryDirectory() as tmp, \
+            _patch.object(_platform, "system", return_value="Linux"):
+        repo = Path(tmp) / "multi-talk"
+        app = repo / real_app.name
+        eng = repo / "MultiTalk"
+        (eng / "weights").mkdir(parents=True)
+        (eng / "generate_multitalk.py").write_text("")
+        win_py = app / "engine-venv" / "Scripts" / "python.exe"
+        win_py.parent.mkdir(parents=True)
+        win_py.write_bytes(b"MZ\x90\x00" + b"\x00" * 60)
+        elf = app / "elf"
+        elf.write_bytes(b"\x7fELF\x02\x01")
+        s.check("a Windows .exe is foreign on Linux",
+                bootstrap.foreign_binary(win_py))
+        s.check("an ELF binary is native on Linux",
+                not bootstrap.foreign_binary(elf))
+        s.check("a script or unreadable file is never called foreign",
+                not bootstrap.foreign_binary(eng / "generate_multitalk.py")
+                and not bootstrap.foreign_binary(app / "nope"))
+        with _patch.object(_platform, "system", return_value="Windows"):
+            s.check("an ELF binary is foreign on Windows",
+                    bootstrap.foreign_binary(elf))
+        bootstrap.REPO_DIR, bootstrap.APP_DIR = repo, app
+        bootstrap.DEFAULT_CONFIG["engine_dir"] = str(eng)
+        try:
+            s.equal("the Windows engine-venv is left alone; Linux gets its own",
+                    bootstrap.venv_python(),
+                    app / "engine-venv-linux" / "bin" / "python")
+            cfg_w = dict(bootstrap.DEFAULT_CONFIG, engine_dir=str(eng),
+                         python=str(win_py))
+            s.equal("engine_python does not hand out the foreign interpreter",
+                    bootstrap.engine_python(cfg_w), "")
+            rows = {d["id"]: d for d in manager.dependencies(cfg_w)}
+            s.check("Engine environment says another system, not Errno 8",
+                    rows["venv"]["state"] == "missing"
+                    and "another operating system" in rows["venv"]["detail"]
+                    and "engine-venv-linux" in rows["venv"]["detail"]
+                    and rows["venv"]["action"] == "install",
+                    rows["venv"]["detail"][:100])
+            notes = bootstrap.heal_paths(cfg_w)
+            s.equal("a saved interpreter built for Windows is cleared on Linux",
+                    cfg_w["python"], "")
+            s.check("and the reason is reported",
+                    any("another operating system" in n for n in notes),
+                    "; ".join(notes))
+            moved = dict(cfg_w, python="D:\\AI\\multi-talk\\" + real_app.name
+                         + "\\engine-venv\\Scripts\\python.exe")
+            bootstrap.heal_paths(moved)
+            s.equal("a rebased path that lands on the Windows python is cleared",
+                    moved["python"], "")
+            # a config healed by an earlier build already holds the Windows
+            # python with a check that matched it then — it must not stick
+            stuck = dict(cfg_w, python=str(win_py))
+            stuck["_location_check"] = bootstrap.location_key(stuck)[:-1]
+            bootstrap.verify_locations(stuck, search=False)
+            s.equal("verify_locations clears a remembered foreign interpreter",
+                    stuck["python"], "")
+            s.check("the location report names it rather than 'not set up'",
+                    any("another operating system" in line
+                        for line in bootstrap.location_report(moved)))
+            logged: list[str] = []
+            calls: list[list[str]] = []
+
+            def fake_run(cmd, **kw):
+                calls.append(cmd)
+                if cmd[1:3] == ["-m", "venv"]:
+                    vp = Path(cmd[3]) / "bin" / "python"
+                    vp.parent.mkdir(parents=True)
+                    vp.write_bytes(b"\x7fELF")
+                import subprocess as _sp
+                return _sp.CompletedProcess(cmd, 0, "", "")
+            with _patch.object(bootstrap, "_run", side_effect=fake_run):
+                vpy = bootstrap.make_venv("python3", logged.append)
+            s.equal("make_venv builds beside the Windows venv, not over it",
+                    vpy, app / "engine-venv-linux" / "bin" / "python")
+            s.check("the Windows venv is untouched",
+                    win_py.read_bytes()[:2] == b"MZ"
+                    and not (app / "engine-venv" / "bin").exists())
+            s.check("and the log says why", any("another operating system"
+                                                in m for m in logged), logged)
+            s.equal("the new one is the engine's Python from then on",
+                    bootstrap.engine_python(dict(moved, python="")), str(vpy))
+            (app / "engine-venv" / "bin").mkdir()
+            (app / "engine-venv" / "bin" / "python").write_bytes(b"\x7fELF")
+            s.equal("an engine-venv with a native interpreter is used as is",
+                    bootstrap.venv_python(),
+                    app / "engine-venv" / "bin" / "python")
+        finally:
+            bootstrap.REPO_DIR, bootstrap.APP_DIR = real_repo, real_app
+            bootstrap.DEFAULT_CONFIG["engine_dir"] = real_default
+
     # -- the start-up search: finds the engine anywhere, prefers the weights -
     s.check("the real engine checkout is recognised",
             bootstrap.is_engine_dir(REAL_ENGINE))
